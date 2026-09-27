@@ -1,0 +1,38 @@
+services:
+  odometry_node:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tram_odometry:latest
+    container_name: tram_odometry_eval
+    network_mode: host
+    ipc: host
+    volumes:
+      - ./bags:/bags:ro
+      - ./eval_results:/eval_results
+      - ../artifacts:/ws/artifacts:ro
+    command: ros2 launch tram_odometry replay.launch.py use_clock:=true
+
+  eval_shell:
+    image: tram_odometry:latest
+    container_name: tram_eval_shell
+    network_mode: host
+    ipc: host
+    volumes:
+      - ./bags:/bags:ro
+      - ./eval_results:/eval_results
+      - ../artifacts:/ws/artifacts:ro
+    stdin_open: true
+    tty: true
+    command: bash
+
+  benchmark:
+    image: tram_odometry:latest
+    container_name: tram_benchmark
+    network_mode: host
+    ipc: host
+    volumes:
+      - ./bags:/bags:ro
+      - ./eval_results:/eval_results
+      - ../artifacts:/ws/artifacts:ro
+    entrypoint: ["/entrypoint.sh", "/ws/run_benchmark.sh"]
