@@ -9,7 +9,8 @@ services:
     ipc: host
     volumes:
       - ./bags:/bags:ro
-      - ../artifacts:/ws/artifacts:ro   # Проброс карт и параметров из корня
+      - ./eval_results:/eval_results
+      - ../artifacts:/ws/artifacts:ro
     command: ros2 launch tram_odometry replay.launch.py use_clock:=true
 
   eval_shell:
@@ -19,7 +20,19 @@ services:
     ipc: host
     volumes:
       - ./bags:/bags:ro
+      - ./eval_results:/eval_results
       - ../artifacts:/ws/artifacts:ro
     stdin_open: true
     tty: true
     command: bash
+
+  benchmark:
+    image: tram_odometry:latest
+    container_name: tram_benchmark
+    network_mode: host
+    ipc: host
+    volumes:
+      - ./bags:/bags:ro
+      - ./eval_results:/eval_results
+      - ../artifacts:/ws/artifacts:ro
+    entrypoint: ["/entrypoint.sh", "/ws/run_benchmark.sh"]
