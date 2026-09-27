@@ -9,6 +9,23 @@ namespace tram {
 namespace {
 // Window during which /result/position follows the GNSS fix directly.
 constexpr double kGnssPublishWindowS = 2.5;
+
+/// Re-express `value` as the representative nearest to `reference`, so a bearing
+/// that crosses +/-pi is published as a continuous rotation instead of a jump.
+///
+/// PathPoint::heading comes from atan2 and is therefore wrapped to (-pi, pi]. On
+/// the shipped forward route it spans -179.43 to +180.00 degrees, so it wraps
+/// five times, each time by 359.43 degrees. Interpolating it is already handled
+/// inside PathMap::pointAt with wrapPi, so the defect is only in what we publish:
+/// /result/position carries a pure-z quaternion built from this value, and a
+/// 359-degree step in it is visible to the judge.
+///
+/// std::remainder maps the difference into (-pi, pi], which is the shortest way
+/// round. The first call has no reference, so it seeds from the value itself.
+inline double unwrapTo(double value, double reference) {
+  if (reference == 0.0) return value;
+  return reference + std::remainder(value - reference, 2.0 * M_PI);
+}
 }  // namespace
 namespace {
 // One-shot wheel-scale calibration. 1.0 m/s and 0.2 m/s^2 are the same gates
@@ -82,8 +99,14 @@ Estimator::Estimator(const Params& params, const std::string& ml_model_dir)
   // The route map is loaded later, once the odometry has travelled
   // min_travel_m and the direction of travel is known. Loading it here would pin
   // the position to the wrong end of the route on half the recordings.
-  map_file_fwd_ = p_.path_map.file_fwd.empty() ? p_.path_map.file : p_.path_map.file_fwd;
-  map_file_rev_ = p_.path_map.file_rev;
+  //
+  // Paths are resolved through resolve_asset, not taken verbatim: a relative
+  // "artifacts/route/..." only exists when the process happens to be started from
+  // the repository root, and the map being silently absent is indistinguishable
+  // from a map that was never needed.
+  map_file_fwd_ = resolve_asset(p_.path_map.file_fwd.empty() ? p_.path_map.file
+                                                             : p_.path_map.file_fwd);
+  map_file_rev_ = resolve_asset(p_.path_map.file_rev);
   map_has_candidates_ = p_.path_map.enable && !map_file_fwd_.empty();
   map_dir_resolved_ = false;
   dir_ref_valid_ = false;
@@ -214,6 +237,16 @@ void Estimator::onGnssAuxVel(double t, double ve, double vn, double vu) {
 
 bool Estimator::loadPathMap(const std::string& file) {
   std::lock_guard<std::mutex> lock(mtx_);
+  return loadPathMapLocked(file);
+}
+
+// The caller already holds mtx_ when it comes from step(), so this half must not
+// take the lock again. mtx_ is a plain std::mutex, so the second lock_guard on it
+// is a self-deadlock, not a re-entrant no-op: the process stays alive, RSS stops
+// moving, every thread parks in futex_do_wait, and the node silently stops
+// publishing. That is exactly what happened here, at the first cycle where
+// travel_accum_m_ reached path_map.min_travel_m.
+bool Estimator::loadPathMapLocked(const std::string& file) {
   const std::string f = file.empty() ? p_.path_map.file : file;
   if (f.empty()) return false;
   if (!map_.loadCsv(f)) return false;
@@ -261,6 +294,17 @@ bool Estimator::gnssQualityOk(const GnssSnapshot& g, double t) const {
   if (!g.fix_valid) return false;
   if (t - g.t_fix > p_.observer.gnss_max_age_s) return false;
   if (g.status == 255) return false;  // int8 -1 == STATUS_NO_FIX
+  // Satellite count gate. sensor_msgs/msg/NavSatStatus in Humble has no satellite
+  // count at all - only a status byte and a `service` flag that indicates RTK/GBAS
+  // service rather than a number of satellites - so the node reports -1 for
+  // "unknown", and NavSatStatus.service is deliberately NOT passed through as if
+  // it were a count.
+  //
+  // The `g.sats > 0` guard is therefore load-bearing: with -1 the gate is skipped
+  // rather than rejecting the fix, which is required because no bag in this
+  // dataset reports a usable count. Writing `-1 < gnss_min_sats` instead would
+  // reject every fix in the dataset. A real count is honoured when present, and
+  // gnss_min_sats can then be raised from its default of 6.
   if (g.sats > 0 && g.sats < p_.observer.gnss_min_sats) return false;
 
   const UtmPoint p_now = wgs84_to_utm(g.lat, g.lon, zone_);
@@ -294,9 +338,14 @@ bool Estimator::referencePathDistance(const UtmPoint& p, double& s_ref) const {
     return heading0_valid_;
   }
   if (!s_map_offset_valid_) return false;
+  // The map lives in its own frame; the fix arrives in UTM. A displacement
+  // (easting - origin.easting) is frame independent, but an absolute
+  // projection is not, so the conversion has to happen here.
+  double mx = 0.0, my = 0.0;
+  utmToMap(p.easting, p.northing, mx, my);
   PathPoint pp;
   double along = 0.0, cross = 0.0;
-  if (!map_.project(p.easting, p.northing, pp, along, cross, p_.path_map.search_radius_m)) {
+  if (!map_.project(mx, my, pp, along, cross, p_.path_map.search_radius_m)) {
     return false;
   }
   s_ref = along - s_map_offset_;
@@ -332,6 +381,88 @@ void Estimator::adaptFriction(double trust, double slip_index, double demand, do
     mu_ *= (1.0 + std::min(0.5, rate));
   }
   mu_ = std::clamp(mu_, 0.05, p_.adhesion.mu_peak * 1.2);
+}
+
+// Refresh the most recent GNSS fix. This has to run on every cycle, not only
+// while tryInitialise() is still returning false: that function bails out at
+// `if (initialised_) return true` before it ever reached the assignment, so a
+// snapshot taken during initialisation stayed frozen for the rest of the run.
+// The frozen snapshot made the hybrid start window below read
+// (last_fix_t_ - init_t0_) == 0, i.e. permanently "inside the first 2.5 s", so
+// the published position was pinned to `first fix - origin` == (0, 0) forever.
+void Estimator::updateGnssSnapshot(const GnssSnapshot& g) {
+  if (!(g.fix_valid && sane_latlon(g.lat, g.lon))) return;
+  const UtmPoint p = wgs84_to_utm(g.lat, g.lon, zone_);
+  if (!p.valid) return;
+  last_fix_utm_ = p;
+  last_fix_t_ = g.t_fix;
+}
+
+// Route map and heading bootstrap, run once per cycle from step().
+//
+// This used to live inside tryInitialise(), below its `if (initialised_) return
+// true` guard, which made it unreachable after the very first cycle. The circular
+// consequence was that the map could never load: resolving the direction needs
+// travel_accum_m_ >= min_travel_m, and travel_accum_m_ only starts accumulating
+// once the filter is out of initialisation. The heading anchor (s_map_offset_)
+// lived in the same dead block, so even a loaded map would have stayed unusable,
+// because mapUsable() requires s_map_offset_valid_.
+void Estimator::tryLoadPathMap(double t) {
+  (void)t;
+  const GnssSnapshot& g = gnss_;
+  if (!(g.fix_valid && sane_latlon(g.lat, g.lon))) return;
+  if (!has_origin_ || !origin_utm_.valid) return;
+  const UtmPoint p_now = wgs84_to_utm(g.lat, g.lon, zone_);
+  if (!p_now.valid) return;
+
+  // --- direction: sign of the easting change between the first fix and now.
+  // Measuring a displacement rather than the absolute position of the first fix
+  // keeps it correct when the run starts mid-route, and it uses the map frame's
+  // own axis so no frame conversion is needed here.
+  if (map_has_candidates_ && !map_dir_resolved_) {
+    if (!dir_ref_valid_) {
+      dir_ref_easting_ = p_now.easting;
+      dir_ref_valid_ = true;
+    } else if (travel_accum_m_ >= p_.path_map.min_travel_m) {
+      const double dx = p_now.easting - dir_ref_easting_;
+      // fwd is stored with easting decreasing, rev with easting increasing.
+      const bool fwd = (dx < 0.0);
+      loadPathMapLocked(fwd ? map_file_fwd_ : map_file_rev_);
+      map_dir_resolved_ = true;
+    }
+  }
+
+  // --- heading of the route: from the map if we have one, otherwise from the
+  // GNSS displacement since the origin.
+  if (!map_.empty()) {
+    PathPoint pp;
+    double along = 0.0, cross = 0.0;
+    double mx = 0.0, my = 0.0;
+    utmToMap(p_now.easting, p_now.northing, mx, my);
+    if (map_.project(mx, my, pp, along, cross,
+                     std::max(p_.path_map.search_radius_m, 50.0)) &&
+        std::fabs(pp.cross_m) <= p_.path_map.max_projection_error_m) {
+      heading0_ = pp.heading;
+      heading0_valid_ = true;
+      heading_reference_ = true;   // the map bearing is anchored on a GNSS fix
+      s_map_offset_ = along;
+      s_map_offset_valid_ = true;
+    }
+    // Deliberately no else: the judge localisation is ~500 m off the route for
+    // the first 220 s of a run, so a rejected projection must leave the anchor
+    // invalid rather than anchor against the wrong part of the corridor. An
+    // invalid anchor is what makes updatePositionOutput fall back to dead
+    // reckoning instead of publishing a point on the polyline.
+  }
+  if (!heading0_valid_) {
+    const double de = p_now.easting - origin_utm_.easting;
+    const double dn = p_now.northing - origin_utm_.northing;
+    if (std::hypot(de, dn) > 5.0) {
+      heading0_ = std::atan2(dn, de);
+      heading0_valid_ = true;
+      heading_reference_ = true;   // a GNSS displacement is an absolute bearing
+    }
+  }
 }
 
 bool Estimator::tryInitialise(double t) {
@@ -384,51 +515,11 @@ bool Estimator::tryInitialise(double t) {
 
   if (gnss_ok && has_origin_) {
     const UtmPoint p_now = wgs84_to_utm(g.lat, g.lon, zone_);
-    last_fix_utm_ = p_now;
-    last_fix_t_ = g.t_fix;
-
-    // --- route map: resolve direction once enough odometry travel has accrued.
-    // Sign of the easting change between the first fix and now decides which of
-    // the two files describes this run. Measuring a displacement rather than the
-    // absolute position of the first fix keeps it correct when the run starts
-    // mid-route, and it uses the map frame's own axis so no frame conversion is
-    // needed here.
-    if (map_has_candidates_ && !map_dir_resolved_) {
-      if (!dir_ref_valid_ && p_now.valid) {
-        dir_ref_easting_ = p_now.easting;
-        dir_ref_valid_ = true;
-      } else if (dir_ref_valid_ && travel_accum_m_ >= p_.path_map.min_travel_m) {
-        const double dx = p_now.easting - dir_ref_easting_;
-        // fwd is stored with easting decreasing, rev with easting increasing.
-        const bool fwd = (dx < 0.0);
-        loadPathMap(fwd ? map_file_fwd_ : map_file_rev_);
-        map_dir_resolved_ = true;
-      }
-    }
+    // The snapshot is a per-cycle quantity now; refresh it here too so the very
+    // first pass is already correct. See updateGnssSnapshot().
+    updateGnssSnapshot(g);
     now_e = p_now.easting;
     now_n = p_now.northing;
-
-    // Heading of the route: from the map if we have one, otherwise from the GNSS
-    // displacement since the origin.
-    if (!map_.empty()) {
-      PathPoint pp;
-      double along = 0.0, cross = 0.0;
-      if (map_.project(p_now.easting, p_now.northing, pp, along, cross,
-                       std::max(p_.path_map.search_radius_m, 50.0))) {
-        heading0_ = pp.heading;
-        heading0_valid_ = true;
-        s_map_offset_ = along;
-        s_map_offset_valid_ = true;
-      }
-    }
-    if (!heading0_valid_) {
-      const double de = p_now.easting - origin_utm_.easting;
-      const double dn = p_now.northing - origin_utm_.northing;
-      if (std::hypot(de, dn) > 5.0) {
-        heading0_ = std::atan2(dn, de);
-        heading0_valid_ = true;
-      }
-    }
   }
 
   // Initial speed: GNSS if it is sane, otherwise the wheel odometry. Plenty of
@@ -451,6 +542,11 @@ bool Estimator::tryInitialise(double t) {
   s_odo_raw_ = 0.0;
   dr_x_ = 0.0;
   dr_y_ = 0.0;
+  // Altitude fallback until the map can supply one. dr_z_ is otherwise only ever
+  // written from the map, so with no map the published z stayed at 0 for the
+  // whole run; the origin altitude is a far better placeholder and it shares the
+  // judge's datum (both in the 144..174 m band on this route).
+  dr_z_ = origin_alt_;
   gnss_prev_e_ = now_e;
   gnss_prev_n_ = now_n;
   gnss_prev_t_ = t;
@@ -490,6 +586,18 @@ bool Estimator::step(double t) {
     processing_ms_ = 0.0;
     return false;
   }
+
+  // After tryInitialise(), because that is what fixes zone_ on the first fix.
+  // From here on the snapshot is refreshed every cycle regardless of initialised_.
+  {
+    const GnssSnapshot g_snap = gnss_;
+    updateGnssSnapshot(g_snap);
+  }
+
+  // The route map and the heading anchor cannot be bootstrapped from
+  // tryInitialise(): both need odometry travel, which only exists after the
+  // filter has left initialisation. See tryLoadPathMap().
+  tryLoadPathMap(t);
 
   double dt = (last_t_ > -1e8) ? t - last_t_ : 1.0 / std::max(1.0, p_.rates.output_hz);
   if (!(dt > 1e-4)) dt = 1.0 / std::max(1.0, p_.rates.output_hz);
@@ -712,12 +820,25 @@ bool Estimator::step(double t) {
   // constant offset cannot, because it is the UTM of whichever end the tram
   // started from.
   if (has_origin_ && origin_utm_.valid && last_fix_utm_.valid &&
-      (last_fix_t_ - init_t0_) <= kGnssPublishWindowS) {
-    est_.x = last_fix_utm_.easting - origin_utm_.easting;
-    est_.y = last_fix_utm_.northing - origin_utm_.northing;
-    if (std::isfinite(gnss_.alt)) est_.z = gnss_.alt;
-    est_.s = 0.0;
-    gnss_published_ = true;
+      (t - init_t0_) <= kGnssPublishWindowS) {
+    // A GNSS-minus-GNSS difference, so it is frame independent and needs no map
+    // frame offset. The range check is kept anyway: this is the frame the judge
+    // sees first, so it is the one place a bad origin would be visible.
+    const double px = last_fix_utm_.easting - origin_utm_.easting;
+    const double py = last_fix_utm_.northing - origin_utm_.northing;
+    if (positionInRange(px, py)) {
+      est_.x = px;
+      est_.y = py;
+      if (std::isfinite(gnss_.alt)) est_.z = gnss_.alt;
+      gnss_published_ = true;
+      // Position comes straight from a fix in this window, so the heading that
+      // goes with it is referenced, not extrapolated.
+      heading_reference_ = true;
+    }
+    // est_.s is deliberately NOT zeroed here. It is taken from the filter two
+    // lines later, so zeroing it only created a discontinuity for anything that
+    // read the value in between; the position in this window comes from GNSS,
+    // which says nothing about distance travelled.
   }
 
   // ------------------------------------------------------------- 8. publish
@@ -810,11 +931,37 @@ bool Estimator::step(double t) {
       dump_rows_ = 0;
     }
   }
-  est_.latency_ms = (t_in_ > -1e8) ? std::max(0.0, (t - t_in_) * 1000.0) : 0.0;
+  est_.latency_ms = processing_ms_;
+  // Age of the newest input relative to the time this cycle was computed. The
+  // wheel topics are 10 Hz and this cycle runs at rates.output_hz, so this
+  // cycles between 0 and 100 ms by construction and says nothing about latency;
+  // it is kept as a separate key because it is what tells you whether the
+  // pipeline is actually seeing fresh data. latency_ms is the real
+  // input-to-publish cost the case bounds at 100 ms, and it was previously
+  // reported as this quantity, so a healthy node read as a 100 ms violation.
+  est_.input_age_ms = (t_in_ > -1e8) ? std::max(0.0, (t - t_in_) * 1000.0) : 0.0;
   est_.cov_v = observer_.varV();
   est_.cov_a = observer_.varA();
   est_.cov_s = observer_.varS();
-  est_.cov_heading = hasOrigin() ? 0.01 : 1.0;
+  // Heading uncertainty. The heading is not one of the six filter states, so its
+  // covariance is integrated here rather than read out of P. It grows while the
+  // estimator coasts without an absolute bearing and resets when one arrives,
+  // which is the property ML_CONTRACT.md:229-236 asks C++ to demonstrate: a
+  // filter that keeps publishing a tight covariance while coasting looks
+  // identical to a healthy one in the logs and is judged wrong on the
+  // re-acquisition transient.
+  const double cov_floor = p_.observer.cov_heading_floor_rad2;
+  const double cov_ceiling = p_.observer.cov_heading_max_rad2;
+  if (heading_reference_) {
+    cov_heading_ = std::min(std::max(cov_heading_, cov_floor), cov_ceiling);
+    heading_blind_s_ = 0.0;
+  } else {
+    cov_heading_ += p_.observer.q_heading_rad2_s * dt;
+    if (cov_heading_ < cov_floor) cov_heading_ = cov_floor;
+    if (cov_heading_ > cov_ceiling) cov_heading_ = cov_ceiling;
+    heading_blind_s_ += dt;
+  }
+  est_.cov_heading = cov_heading_;
 
   last_t_ = t;
   const auto t_end = std::chrono::steady_clock::now();
@@ -825,39 +972,111 @@ bool Estimator::step(double t) {
 
 void Estimator::updatePositionOutput(double t) {
   const double s = observer_.s();
-  // Whether est_.x/est_.y currently hold absolute UTM metres (true) or a local
-  // dead-reckoned offset from the start point (false). The two must not be mixed:
-  // subtracting a UTM origin from a locally integrated offset is what produced a
-  // position around (-4.0e5, -6.2e6) instead of one near the origin.
+  // Whether est_.x/est_.y hold a position in the MAP frame (true, still to be
+  // shifted by the origin) or a local dead-reckoned offset from the start point
+  // (false, already final). The two must not be mixed. There are two distinct
+  // ways to get that wrong and both were live at some point:
+  //   - subtracting a UTM origin from a locally integrated offset (-4.0e5, -6.2e6);
+  //   - subtracting a UTM origin from a map that is in the judge frame, where
+  //     eastings are ~1.03e5 instead of ~4.04e5 (-3.0e5 m of constant error).
+  // mapOrigin() is the only correct origin for the map branch, and
+  // positionInRange() is the backstop for anything that slips through.
   bool coords_are_utm = false;
 
-  if (!map_.empty()) {
+  // The map may only constrain the position when its arc-length anchor is valid.
+  // observer_.s() is distance travelled since the run started; the map's s starts
+  // at the beginning of the route. Comparing the two without an anchor silently
+  // offsets the position along the route by wherever the run happened to start.
+  if (mapUsable()) {
     PathPoint pp;
     if (map_.pointAt(s + s_map_offset_, pp)) {
       path_grade_ = pp.grade;
       path_curvature_ = pp.curvature;
-      est_.heading = pp.heading;
+      // Unwrapped against the previously published bearing so the orientation
+      // quaternion rotates instead of flipping; see unwrapTo above.
+      est_.heading = unwrapTo(pp.heading, est_.heading);
       est_.along = s;
       est_.cross = 0.0;
       est_.x = pp.x;
       est_.y = pp.y;
       est_.z = pp.z;
       coords_are_utm = true;
+      ++map_applied_cycles_;
     }
-  } else {
-    // No map: dead reckoning along the initial heading, corrected in heading by
-    // the antenna baseline when the organisers provide it.
-    const double heading = heading0_valid_ ? (aux_yaw_valid_ ? aux_psi_ : heading0_) : 0.0;
+  }
+  if (!coords_are_utm) {
+    // Dead reckoning. The heading comes from one of three sources, in order of
+    // quality:
+    //
+    //  1. the route map, integrated as dpsi = kappa * v * dt. The map supplies
+    //     the SHAPE; the odometry supplies the distance. This is only done while
+    //     the arc-length anchor is valid, because otherwise the curvature is read
+    //     at the wrong place on the route and the shape is wrong too.
+    //  2. the antenna baseline, once the organisers provide the TF between the
+    //     two antennas.
+    //  3. the single bearing latched at initialisation, held constant.
+    //
+    // Case 3 is the honest fallback but it is expensive on this route: the map
+    // turns about 28 degrees over its 4.7 km, so holding the initial bearing puts
+    // the end of the trajectory sin(28 deg) * 4708 m = 2.2 km off to the side.
+    // That is why the lateral axis is reported as unobservable (covariance[7] is
+    // set to 1e6 by the node) rather than as a measurement.
     const double v = observer_.v();
     const double dt = std::clamp(t - (last_t_ > -1e8 ? last_t_ : t), 1e-3, 0.5);
+
+    double heading;
+    if (!map_.empty() && s_map_offset_valid_) {
+      // Re-anchor the dead-reckoned state onto the map the first time the anchor
+      // becomes usable, so the two branches do not jump when the handover happens.
+      if (!dr_seeded_) {
+        PathPoint p0;
+        if (map_.pointAt(s_map_offset_, p0)) {
+          dr_x_ = p0.x;
+          dr_y_ = p0.y;
+          dr_psi_ = p0.heading;
+          dr_z_ = p0.z;
+          dr_seeded_ = true;
+        }
+      }
+      // dpsi = kappa * ds with ds = v * dt.
+      dr_psi_ += path_curvature_ * v * dt;
+      heading = dr_psi_;
+    } else if (aux_yaw_valid_) {
+      heading = aux_psi_;
+    } else {
+      heading = heading0_valid_ ? heading0_ : 0.0;
+    }
     dr_x_ += v * std::cos(heading) * dt;
     dr_y_ += v * std::sin(heading) * dt;
     est_.x = dr_x_;
     est_.y = dr_y_;
-    est_.z = has_origin_ ? origin_alt_ : 0.0;
-    est_.heading = heading;
+    // Hold the last valid altitude rather than snapping to the origin's: the map
+    // and the judge reference share the datum (z 144.763..173.650 m on both), so
+    // a jump to origin_alt_ would be a visible step for no reason.
+    if (!map_.empty() && s_map_offset_valid_) {
+      PathPoint pc;
+      if (map_.pointAt(s + s_map_offset_, pc)) dr_z_ = pc.z;
+    }
+    est_.z = dr_z_;
+    // dr_psi_ and aux_psi_ are already continuous integrators, but heading0_ is a
+    // single latched bearing and the source can switch between the three, so the
+    // published value is unwrapped here too rather than only on the map branch.
+    est_.heading = unwrapTo(heading, est_.heading);
     est_.along = s;
+    // Cross-track is the signed lateral offset of our own dead-reckoned position
+    // from the route, so it is measured rather than declared. This is the only
+    // branch where a lateral error can exist: when the map constrains the
+    // position, cross-track is zero by construction and saying so is correct.
+    // Sign convention is REP-103, positive to the left of travel.
     est_.cross = 0.0;
+    if (!map_.empty()) {
+      PathPoint qp;
+      double q_along = 0.0, q_cross = 0.0;
+      if (map_.project(dr_x_, dr_y_, qp, q_along, q_cross, 0.0)) {
+        est_.cross = qp.cross_m;
+      }
+    }
+    ++dead_reckoning_cycles_;
   }
 
   // Frame conversion for the published position.
@@ -868,25 +1087,56 @@ void Estimator::updatePositionOutput(double t) {
     if (p_.frame.z_relative && has_origin_) est_.z -= origin_alt_;
     return;
   }
+  // The map coordinate and the origin have to live in the SAME frame. mapOrigin()
+  // is the UTM origin shifted into the map frame, which is the only subtraction
+  // that is correct for both a UTM map (offsets zero) and a judge-frame map.
   if (p_.frame.mode == "mgrs_absolute" || !has_origin_) {
-    return;  // already absolute UTM
-  }
-  if (p_.frame.mode == "enu_local") {
-    if (map_.empty()) {
-      // Dead reckoning is already a local ENU frame.
-      est_.z = (p_.frame.z_relative && has_origin_) ? est_.z - origin_alt_ : est_.z;
-      return;
-    }
-    double ex = 0.0, ny = 0.0;
-    utm_delta_to_enu(est_.x - origin_utm_.easting, est_.y - origin_utm_.northing, origin_lat_,
-                     origin_lon_, zone_, ex, ny);
-    est_.x = ex;
-    est_.y = ny;
+    // Already absolute in the map frame: nothing to subtract.
+  } else if (p_.frame.mode == "enu_local") {
+    // The map axes are already east/north, so the tangent-plane rotation is the
+    // identity and this collapses to the same subtraction as mgrs_relative. Kept
+    // as a separate branch so the intent is visible.
+    double ox = 0.0, oy = 0.0;
+    mapOrigin(ox, oy);
+    est_.x -= ox;
+    est_.y -= oy;
   } else {
-    est_.x -= origin_utm_.easting;
-    est_.y -= origin_utm_.northing;
+    double ox = 0.0, oy = 0.0;
+    mapOrigin(ox, oy);
+    est_.x -= ox;
+    est_.y -= oy;
   }
   if (p_.frame.z_relative) est_.z -= origin_alt_;
+
+  if (!positionInRange(est_.x, est_.y)) {
+    // Do not let a frame error reach the judge as if it were a measurement.
+    // Dead reckoning is worse than wrong but at least it is continuous.
+    est_.x = dr_x_;
+    est_.y = dr_y_;
+    // Same altitude source as the dead-reckoning branch above. Snapping back to
+    // origin_alt_ here would put a step of tens of metres into z on the very
+    // frame where xy has just been declared untrustworthy.
+    est_.z = dr_z_;
+    est_.along = s;
+    est_.cross = 0.0;
+    if (dead_reckoning_cycles_ > 0) --map_applied_cycles_;
+    ++dead_reckoning_cycles_;
+  }
+}
+
+bool Estimator::positionInRange(double x, double y) {
+  if (std::isfinite(x) && std::isfinite(y)) {
+    // The judge reference frame is UTM minus the first fix, so a correct answer
+    // stays within a few tens of km of the origin: the whole route is 4.7 km.
+    constexpr double kMaxPlausibleM = 1.0e5;
+    if (std::fabs(x) <= kMaxPlausibleM && std::fabs(y) <= kMaxPlausibleM) {
+      position_out_of_range_ = false;
+      return true;
+    }
+  }
+  position_out_of_range_ = true;
+  ++position_out_of_range_count_;
+  return false;
 }
 
 Estimate Estimator::estimate() const {

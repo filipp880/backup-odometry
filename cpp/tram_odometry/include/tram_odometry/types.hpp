@@ -78,8 +78,13 @@ struct Estimate {
   double yaw_rate = 0.0; ///< rad/s, from GNSS baseline when available
 
   // --- telemetry ---
-  double latency_ms = 0.0;  ///< input -> publish delay
-  double cycle_ms = 0.0;    ///< node cycle duration
+  /// Wall-clock cost of the control cycle, which is the input-to-publish latency
+  /// the case bounds at 100 ms. Previously this field held the age of the newest
+  /// input instead, which with 10 Hz wheel topics cycles between 0 and 100 ms by
+  /// construction and made a healthy node look like a 100 ms violation.
+  double latency_ms = 0.0;
+  double input_age_ms = 0.0;  ///< sim time since the newest /vehicle/* message
+  double cycle_ms = 0.0;      ///< node cycle duration
   double wheel_force = 0.0; ///< modelled traction force at wheel, N
   double brake_force = 0.0; ///< modelled brake force at wheel, N
 

@@ -8,10 +8,24 @@
 namespace tram {
 namespace {
 constexpr double kTwoPi = 2.0 * 3.14159265358979323846;
+/// Half-width of the curvature smoothing window, in metres of route. See the
+/// noise measurements in finalise().
+constexpr double kCurvatureWindowM = 11.0;
 inline double wrapPi(double a) {
   while (a > M_PI) a -= kTwoPi;
   while (a < -M_PI) a += kTwoPi;
   return a;
+}
+
+/// Signed cross-track of a query point relative to a path point.
+///
+/// The left normal of a travel direction (tx, ty) is (-ty, tx): with x east and
+/// y north that is a +90 degree rotation, so a query to the left of travel comes
+/// out positive, which is the REP-103 sense (Y left).
+inline double signedCross(double qx, double qy, double px, double py, double heading) {
+  const double tx = std::cos(heading);
+  const double ty = std::sin(heading);
+  return (qx - px) * (-ty) + (qy - py) * tx;
 }
 }  // namespace
 
@@ -65,7 +79,18 @@ void PathMap::finalise() {
     pts_[i].heading = std::atan2(dy, dx);
   }
 
-  // Curvature from three consecutive points (Menger curvature), smoothed once.
+  // Curvature from three consecutive points (Menger curvature).
+  //
+  // The Menger cross product is a small difference of two nearly parallel vectors,
+  // so on a map with ~1 m point spacing and millimetre coordinate quantisation it
+  // is noise dominated. Measured on artifacts/route/route_map.csv: the raw
+  // estimate has std 0.0076 1/m and peaks at 0.0436 1/m, while the tightest real
+  // turn on the route is 30.7 m radius = 0.0326 1/m. A single 3-point average
+  // (what this used to do) leaves rms error 0.0055 1/m against a smoothed
+  // reference; a windowed average over ~11 m brings it to 0.00086 1/m, 6.4x
+  // better. That matters because curvature feeds dpsi = kappa * v * dt in the
+  // dead-reckoning heading: the residual noise random-walks into 0.37 rad of
+  // heading by the end of the 4.7 km route, which is 1.7 km of lateral error.
   std::vector<double> curv(n, 0.0);
   for (size_t i = 1; i + 1 < n; ++i) {
     const double ax = pts_[i].x - pts_[i - 1].x, ay = pts_[i].y - pts_[i - 1].y;
@@ -76,13 +101,28 @@ void PathMap::finalise() {
       curv[i] = 2.0 * cross / (la * lb * (la + lb));
     }
   }
+  // Windowed mean, half-width in samples chosen from the point spacing so the
+  // window is about 11 m of route whatever the map resolution is.
+  const double step = (n > 1) ? std::sqrt((pts_[1].x - pts_[0].x) * (pts_[1].x - pts_[0].x) +
+                                         (pts_[1].y - pts_[0].y) * (pts_[1].y - pts_[0].y))
+                               : 1.0;
+  const size_t half = static_cast<size_t>(std::max(1.0, std::floor(kCurvatureWindowM / (2.0 * step))));
+  std::vector<double> cs(n, 0.0);
   for (size_t i = 0; i < n; ++i) {
-    const size_t a = (i == 0) ? 0 : i - 1;
-    const size_t b = (i + 1 == n) ? n - 1 : i + 1;
-    pts_[i].curvature = 0.5 * (curv[a] + curv[b]);
+    const size_t lo = (i > half) ? i - half : 0;
+    const size_t hi = (i + half + 1 < n) ? i + half + 1 : n;
+    double acc = 0.0;
+    for (size_t k = lo; k < hi; ++k) acc += curv[k];
+    cs[i] = acc / static_cast<double>(hi - lo);
   }
+  for (size_t i = 0; i < n; ++i) pts_[i].curvature = cs[i];
 
-  // Grade from the elevation profile (smoothed over ~20 m).
+  // Grade from the elevation profile. Unlike curvature this is NOT noise
+  // dominated: z is quantised to 1 mm over a 2 m baseline, which is 7e-4 rad of
+  // noise against an observed spread of 0.0157 rad, and widening the window
+  // does not reduce the spread. The +/-0.035 rad is real terrain, and it is
+  // worth keeping: at 38 t it is +/-13 kN of tractive effort, about 15% of the
+  // maximum, which is what a 2% gradient costs.
   for (size_t i = 0; i < n; ++i) {
     const size_t a = (i == 0) ? 0 : i - 1;
     const size_t b = (i + 1 == n) ? n - 1 : i + 1;
@@ -146,14 +186,17 @@ bool PathMap::project(double x, double y, PathPoint& out, double& along, double&
   if (n == 0) return false;
   if (n == 1) {
     out = pts_[0];
+    out.cross_m = 0.0;
     along = 0.0;
     cross = std::hypot(x - out.x, y - out.y);
+    out.cross_m = signedCross(x, y, out.x, out.y, out.heading);
     return max_radius <= 0.0 || cross <= max_radius;
   }
 
   // Coarse search in the grid neighbourhood, then refine on the segment.
   size_t best = 0;
   double best_d2 = 1e300;
+  bool have_best = false;
   const int c = cellOf(x, y);
   const int ring = 1;
   if (c >= 0) {
@@ -170,25 +213,33 @@ bool PathMap::project(double x, double y, PathPoint& out, double& along, double&
           if (d2 < best_d2) {
             best_d2 = d2;
             best = i;
+            have_best = true;
           }
         }
       }
     }
   }
-  if (best_d2 > 1e299) {  // index unusable: linear fallback
+  if (!have_best) {
+    // The query fell outside the indexed neighbourhood (cellOf clamps to the
+    // map bounding box, so an out-of-bounds query lands in a corner cell that
+    // may be empty). Scan every point rather than reporting a wrong nearest.
+    best_d2 = 1e300;
     for (size_t i = 0; i < n; ++i) {
       const double ddx = pts_[i].x - x, ddy = pts_[i].y - y;
       const double d2 = ddx * ddx + ddy * ddy;
       if (d2 < best_d2) {
         best_d2 = d2;
         best = i;
+        have_best = true;
       }
     }
+    if (!have_best) return false;
   }
 
   // Refine against the two adjacent segments.
   double best_cross = 1e300, best_s = 0.0, best_heading = 0.0, best_grade = 0.0, best_curv = 0.0;
-  double best_z = 0.0;
+  double best_z = 0.0, best_px = 0.0, best_py = 0.0;
+  bool have_refine = false;
   auto consider = [&](size_t i, size_t j) {
     if (j >= n) return;
     const double ax = pts_[i].x, ay = pts_[i].y;
@@ -200,8 +251,11 @@ bool PathMap::project(double x, double y, PathPoint& out, double& along, double&
     t = std::clamp(t, 0.0, 1.0);
     const double px = ax + t * ex, py = ay + t * ey;
     const double d2 = (x - px) * (x - px) + (y - py) * (y - py);
-    if (d2 < best_cross) {
+    if (!have_refine || d2 < best_cross) {
+      have_refine = true;
       best_cross = d2;
+      best_px = px;
+      best_py = py;
       best_s = pts_[i].s + t * std::sqrt(len2);
       best_heading = pts_[i].heading + t * wrapPi(pts_[j].heading - pts_[i].heading);
       best_grade = pts_[i].grade + t * (pts_[j].grade - pts_[i].grade);
@@ -211,12 +265,17 @@ bool PathMap::project(double x, double y, PathPoint& out, double& along, double&
   };
   if (best > 0) consider(best - 1, best);
   consider(best, best + 1);
+  consider(best, best + 2);
 
-  if (best_cross > 1e299) return false;
+  if (!have_refine) return false;
   best_cross = std::sqrt(best_cross);
 
-  out.x = x;
-  out.y = y;
+  // out is the point ON THE MAP, not the query. Returning the query here used to
+  // make a UTM coordinate look like a map coordinate, which is how a 300 km
+  // position error survived: the caller subtracted a UTM origin from a number
+  // that had never been converted.
+  out.x = best_px;
+  out.y = best_py;
   out.z = best_z;
   out.s = best_s;
   out.heading = best_heading;
@@ -224,6 +283,7 @@ bool PathMap::project(double x, double y, PathPoint& out, double& along, double&
   out.grade = best_grade;
   along = best_s;
   cross = best_cross;
+  out.cross_m = signedCross(x, y, best_px, best_py, best_heading);
   return max_radius <= 0.0 || best_cross <= max_radius;
 }
 
@@ -257,6 +317,7 @@ bool PathMap::pointAt(double s, PathPoint& out) const {
   out.heading = pts_[lo].heading + t * wrapPi(pts_[hi].heading - pts_[lo].heading);
   out.curvature = pts_[lo].curvature + t * (pts_[hi].curvature - pts_[lo].curvature);
   out.grade = pts_[lo].grade + t * (pts_[hi].grade - pts_[lo].grade);
+  out.cross_m = 0.0;   // not a projection: no query point to measure against
   return true;
 }
 

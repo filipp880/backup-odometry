@@ -93,6 +93,24 @@ struct ObserverParams {
   double slip_adaptive_rate = 0.05;
   double trust_min = 0.02;
   double trust_max = 0.98;
+  /// Process noise of the published heading uncertainty, rad^2/s. The heading is
+  /// not a filter state - it comes from the route map or from a single latched
+  /// GNSS bearing - so its covariance has to be integrated by hand. It grows
+  /// while the estimator coasts without an absolute reference and is reset when
+  /// one arrives.
+  ///
+  /// ML_CONTRACT.md asks for exactly this test: "EKF covariance must actually
+  /// grow during the blind segment. A filter that keeps publishing a tight
+  /// covariance while coasting will look identical to a healthy one in the logs
+  /// and will be judged wrong on the re-acquisition transient." The published
+  /// value used to be the constant 0.01, which is the failure mode described.
+  /// 4.0e-5 rad^2/s reaches 1.0 rad^2 after about 2.2 minutes blind, i.e. a
+  /// heading standard deviation that has grown from 0.1 rad to the full pi.
+  double q_heading_rad2_s = 4.0e-5;
+  /// Floor the heading covariance is reset to when an absolute reference lands.
+  double cov_heading_floor_rad2 = 0.01;
+  /// Upper bound, so a long blind segment saturates instead of growing forever.
+  double cov_heading_max_rad2 = 10.0;
 };
 
 struct FrameParams {
@@ -153,8 +171,32 @@ struct PathMapParams {
   // Odometry travel before the map may constrain the position. Below that the
   // estimator runs blind rather than snapping to a map it cannot yet follow.
   double min_travel_m = 200.0;
-  std::string frame_convention = "utm";
+  // Frame of the map files, expressed as the constant that was removed from the
+  // UTM coordinates to obtain them:
+  //
+  //   map_x = utm_easting  - frame_offset_e
+  //   map_y = utm_northing - frame_offset_n
+  //
+  // Both zero means the map is already in UTM 37N and no conversion happens,
+  // which is the exact case. Non-zero is for the organiser-supplied maps, which
+  // arrive in their own local metric frame (see artifacts/route/*.csv headers).
+  //
+  // The origin must be subtracted in the *map's* frame, not in UTM: mixing the
+  // two cost 300 km of constant position error, because the judge frame sits
+  // around x = 1.0e5 while a UTM easting is around 4.0e5. So the estimator
+  // converts the geodetic origin into the map frame before using it.
+  //
+  // Measured from artifacts/route/route_map.csv against route_map_fwd.csv over
+  // all 4710 paired points: easting 299963.898 +/- 0.278 m,
+  // northing 6102473.647 +/- 1.381 m. A single constant describes the whole
+  // route; residuals are constant bias, not drift.
+  double frame_offset_e = 0.0;
+  double frame_offset_n = 0.0;
   double search_radius_m = 25.0;
+  // Largest cross-track offset still accepted as "on this route" when the
+  // arc-length anchor is captured. The judge localisation sits ~500 m off the
+  // route for the first 220 s of a run, so without this gate the anchor would
+  // be taken against the wrong part of the corridor.
   double max_projection_error_m = 8.0;
   bool publish_s = true;
 };
@@ -217,4 +259,15 @@ class Node;
 namespace tram {
 /// Declares every parameter and loads defaults/config. Must be called once.
 Params declare_params(rclcpp::Node& node);
+
+/// Resolves a configured asset path against, in order: an absolute path, the
+/// installed package share directory, and the current working directory.
+///
+/// Every configured path used to be resolved against the working directory alone,
+/// so `ros2 run tram_odometry odometry_node` picked up a different model
+/// descriptor depending on where it was launched from - the all-zero stub in one
+/// case and the trained artifact in another, with the same "ready" diagnostic.
+/// An empty result means the asset was not found; the caller must then say so
+/// rather than fall back to a default.
+std::string resolve_asset(const std::string& rel, const std::string& share_subdir = {});
 }  // namespace tram

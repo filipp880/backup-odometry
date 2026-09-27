@@ -88,7 +88,18 @@ install(TARGETS odometry_node tram_bench
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY include/ DESTINATION include)
+# artifacts/ carries the route maps and lives INSIDE the package, so that
+# `colcon build` produces a self-contained install tree: the node resolves the map
+# through <share>/artifacts/route/..., which means it no longer depends on being
+# launched from the repository root. The same maps are kept at the repository root
+# because the Python tooling reads them from there.
 install(DIRECTORY config launch models DESTINATION share/${PROJECT_NAME})
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/artifacts")
+  install(DIRECTORY artifacts DESTINATION share/${PROJECT_NAME})
+else()
+  message(WARNING "tram_odometry: no artifacts/ directory in the package; the route map "
+                  "will not be installed and path_map.enable should be false")
+endif()
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

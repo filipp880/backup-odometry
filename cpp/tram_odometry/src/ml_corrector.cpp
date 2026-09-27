@@ -46,7 +46,14 @@ void MlCorrector::configure(const MlParams& params, const std::string& model_dir
     return;
   }
 
-  std::string dir = p_.model_dir.empty() ? model_dir : p_.model_dir;
+  // The `model_dir` argument is the one the caller already resolved - absolute,
+  // then the installed share directory, then the working directory. It must win
+  // over p_.model_dir, which is the raw parameter and is relative ("models" in
+  // config/params.yaml). Preferring the parameter threw the resolved path away
+  // and made the corrector open the relative "models/ml_model.yaml", so from an
+  // install tree it reported "descriptor rejected: cannot open descriptor" while
+  // the artifact was sitting in the share directory all along.
+  std::string dir = !model_dir.empty() ? model_dir : p_.model_dir;
   if (dir.empty()) {
     backend_ = std::make_unique<NullBackend>();
     stats_.backend = "null";

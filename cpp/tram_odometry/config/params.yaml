@@ -165,6 +165,14 @@ tram_odometry:
       slip_adaptive_rate: 0.05
       trust_min: 0.02            # нижняя граница веса одометрии
       trust_max: 0.98
+      # Рыскание не является состоянием фильтра: оно приходит из карты маршрута
+      # либо из одного зафиксированного азимута GNSS. Поэтому его ковариация
+      # интегрируется вручную: растёт пока оценка идёт вслепую, сбрасывается при
+      # появлении абсолютной привязки. Раньше публиковалась константа 0.01 —
+      # ровно тот случай, который ML_CONTRACT.md называет неприемлемым.
+      q_heading_rad2_s: 4.0e-5          # ~1.0 rad^2 через 2.2 мин вслепую
+      cov_heading_floor_rad2: 0.01      # сброс при привязке
+      cov_heading_max_rad2: 10.0        # насыщение, а не бесконечный рост
 
     # ------------------------------------------- обученная коррекция (ML, опционально)
     # Контракт фичей и выходов: include/tram_odometry/ml_features.hpp,
@@ -197,13 +205,20 @@ tram_odometry:
       dump_path: "features_dump.csv"
 
     # ------------------------------------------------------------- pathgraph / карта
+    #
+    # Рамка карты. Карты из artifacts/route/ лежат в UTM zone 37N (zone=37,
+    # false northing выключен), поэтому смещение нулевое и origin вычитается
+    # напрямую. Если организаторы пришлют карту в своей локальной метрической
+    # системе (x ~ 1e5, как в route_map_fwd.csv), здесь надо указать константу,
+    # вычтенную из UTM при переводе: см. PathMapParams в params.hpp.
     path_map:
       enable: true
-      file: "artifacts/route/route_map_fwd.csv"
-      file_fwd: "artifacts/route/route_map_fwd.csv"   # x decreasing
-      file_rev: "artifacts/route/route_map_rev.csv"   # x increasing
-      min_travel_m: 200.0                            # odometry travel before the map applies
-      frame_convention: "utm"    # utm | enu
+      file: "artifacts/route/route_map.csv"               # UTM 37N, вперёд
+      file_fwd: "artifacts/route/route_map.csv"           # x убывает
+      file_rev: "artifacts/route/route_map_rev_utm.csv"   # x возрастает
+      min_travel_m: 200.0                                  # odometry travel before the map applies
+      frame_offset_e: 0.0        # map_x = utm_easting  - frame_offset_e
+      frame_offset_n: 0.0        # map_y = utm_northing - frame_offset_n
       search_radius_m: 25.0
       max_projection_error_m: 8.0
       publish_s: true            # публиковать путевую координату s

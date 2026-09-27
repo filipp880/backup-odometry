@@ -1,7 +1,9 @@
 #include "tram_odometry/params.hpp"
 
+#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <rclcpp/rclcpp.hpp>
 
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -14,6 +16,23 @@ void load(rclcpp::Node& node, const std::string& name, T& out) {
 }
 
 }  // namespace
+
+std::string resolve_asset(const std::string& rel, const std::string& share_subdir) {
+  namespace fs = std::filesystem;
+  if (rel.empty()) return {};
+  const fs::path p(rel);
+  if (p.is_absolute()) return fs::exists(p) ? p.string() : std::string{};
+  try {
+    const fs::path share =
+        fs::path(ament_index_cpp::get_package_share_directory("tram_odometry"));
+    const fs::path cand = share / share_subdir / rel;
+    if (fs::exists(cand)) return cand.string();
+  } catch (const std::exception&) {
+    // Package not installed (running from a build tree). Fall through to CWD.
+  }
+  if (fs::exists(p)) return p.string();
+  return {};
+}
 
 Params declare_params(rclcpp::Node& node) {
   Params p;
@@ -158,6 +177,9 @@ Params declare_params(rclcpp::Node& node) {
   load(node, "observer.slip_adaptive_rate", p.observer.slip_adaptive_rate);
   load(node, "observer.trust_min", p.observer.trust_min);
   load(node, "observer.trust_max", p.observer.trust_max);
+  load(node, "observer.q_heading_rad2_s", p.observer.q_heading_rad2_s);
+  load(node, "observer.cov_heading_floor_rad2", p.observer.cov_heading_floor_rad2);
+  load(node, "observer.cov_heading_max_rad2", p.observer.cov_heading_max_rad2);
 
   // --- learned residual corrector -----------------------------------------
   load(node, "ml.enable", p.ml.enable);
@@ -182,7 +204,8 @@ Params declare_params(rclcpp::Node& node) {
   load(node, "path_map.file_fwd", p.path_map.file_fwd);
   load(node, "path_map.file_rev", p.path_map.file_rev);
   load(node, "path_map.min_travel_m", p.path_map.min_travel_m);
-  load(node, "path_map.frame_convention", p.path_map.frame_convention);
+  load(node, "path_map.frame_offset_e", p.path_map.frame_offset_e);
+  load(node, "path_map.frame_offset_n", p.path_map.frame_offset_n);
   load(node, "path_map.search_radius_m", p.path_map.search_radius_m);
   load(node, "path_map.max_projection_error_m", p.path_map.max_projection_error_m);
   load(node, "path_map.publish_s", p.path_map.publish_s);

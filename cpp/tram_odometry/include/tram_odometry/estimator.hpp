@@ -100,6 +100,12 @@ class Estimator {
 
   void updateWheel(WheelSlot& slot, double t, double value_kmh);
   bool tryInitialise(double t);
+  void updateGnssSnapshot(const GnssSnapshot& g);
+  void tryLoadPathMap(double t);
+
+  /// Same as loadPathMap() but without taking mtx_. Only for call paths that
+  /// already hold it, i.e. everything reached from step().
+  bool loadPathMapLocked(const std::string& file);
   bool gnssQualityOk(const GnssSnapshot& g, double t) const;
   void accumulateReference(double t, const GnssSnapshot& g);
   void updatePositionOutput(double t);
@@ -109,6 +115,45 @@ class Estimator {
   void adaptFriction(double trust, double slip_index, double demand, double dt,
                      double a_wheel);
   void computeYawRate(const GnssSnapshot& g, double t);
+
+  // ------------------------------------------------------------ map frames
+  //
+  // The route map lives in its own frame (path_map.frame_offset_{e,n}) and the
+  // geodetic origin lives in UTM. Every subtraction between a map coordinate and
+  // a geodetic quantity has to go through these two helpers. Skipping them is
+  // what produced a published position around (-3.0e5, -6.1e6) m: a judge-frame
+  // easting of ~1.03e5 minus a UTM easting of ~4.04e5.
+
+  /// UTM -> map frame. Identity when the map is already in UTM.
+  void utmToMap(double easting, double northing, double& mx, double& my) const {
+    mx = easting - p_.path_map.frame_offset_e;
+    my = northing - p_.path_map.frame_offset_n;
+  }
+
+  /// Map frame -> UTM, for the rare caller that needs a geodetic value back.
+  void mapToUtm(double mx, double my, double& easting, double& northing) const {
+    easting = mx + p_.path_map.frame_offset_e;
+    northing = my + p_.path_map.frame_offset_n;
+  }
+
+  /// The geodetic origin expressed in the MAP frame. This is the quantity the
+  /// published position must subtract.
+  void mapOrigin(double& ox, double& oy) const {
+    ox = origin_utm_.easting - p_.path_map.frame_offset_e;
+    oy = origin_utm_.northing - p_.path_map.frame_offset_n;
+  }
+
+  /// True when a map is loaded AND its arc-length anchor is valid, i.e. when the
+  /// map can legitimately constrain the position. Without a valid anchor
+  /// observer_.s() counts distance travelled, which is unrelated to the map's
+  /// own arc length unless the start of the run coincides with s = 0.
+  bool mapUsable() const { return !map_.empty() && s_map_offset_valid_; }
+
+  /// Sanity bound on a published position. A correct answer for this route is
+  /// within a few tens of km of the origin; 1e5 m leaves an order of magnitude
+  /// of headroom while still catching a frame mix-up. Records the violation and
+  /// returns false when the value is out of range.
+  bool positionInRange(double x, double y);
 
   Params p_;
   TractionModel traction_;
@@ -150,12 +195,34 @@ class Estimator {
   double heading0_ = 0.0;
   bool heading0_valid_ = false;
   double dr_x_ = 0.0, dr_y_ = 0.0;  ///< dead-reckoning position (no map case)
+  double dr_psi_ = 0.0;               ///< dead-reckoned heading, integrated as kappa*v*dt
+  double dr_z_ = 0.0;                ///< last valid altitude, held through blind segments
+  /// True once dr_x_/dr_y_/dr_psi_ have been seeded from the route map, so the
+  /// handover from map-constrained to dead-reckoned position does not jump.
+  bool dr_seeded_ = false;
   double yaw_rate_ = 0.0;
   bool yaw_valid_ = false;
   double last_aux_yaw_ = 0.0;
   double last_aux_t_ = -1e9;
   bool aux_yaw_valid_ = false;
   double mu_ = 0.35;
+  /// Frame-mix-up detector for the published position. A violation is counted and
+  /// reported instead of being published as if it were a measurement.
+  bool position_out_of_range_ = false;
+  uint64_t position_out_of_range_count_ = 0;
+  uint64_t map_applied_cycles_ = 0;
+  uint64_t dead_reckoning_cycles_ = 0;
+  /// Integrated heading uncertainty, rad^2. The heading is not a filter state,
+  /// so this is propagated by hand: it grows at observer.q_heading_rad2_s per
+  /// second while no absolute reference has been seen and is reset to
+  /// observer.cov_heading_floor_rad2 when one lands.
+  double cov_heading_ = 0.01;
+  /// True while the published heading has an absolute reference: the route map
+  /// with a valid anchor, or the initial GNSS bearing. Cleared the moment that
+  /// reference is lost, which is what starts the covariance growth.
+  bool heading_reference_ = false;
+  /// Seconds since the last absolute heading reference, for diagnostics.
+  double heading_blind_s_ = 0.0;
 
   double last_t_ = -1e9;
   double t_in_ = -1e9;  ///< timestamp of the freshest input message
@@ -226,6 +293,18 @@ class Estimator {
   double travelAccumM() const { return travel_accum_m_; }
   uint64_t gnssFixCount() const { return gnss_fix_count_; }
   bool gnssPublished() const { return gnss_published_; }
+  bool mapAnchorValid() const { return s_map_offset_valid_; }
+  double mapAnchorM() const { return s_map_offset_; }
+  /// True once a frame mix-up has been detected in the published position. It is
+  /// a hard failure of criterion 2, so it is surfaced in /result/diagnostics
+  /// rather than left to be discovered in the logs.
+  bool positionOutOfRange() const { return position_out_of_range_; }
+  uint64_t positionOutOfRangeCount() const { return position_out_of_range_count_; }
+  double headingBlindS() const { return heading_blind_s_; }
+  /// Number of cycles in which the position came from the route map rather than
+  /// from dead reckoning. Lets the operator see the map is actually engaged.
+  uint64_t mapAppliedCycles() const { return map_applied_cycles_; }
+  uint64_t deadReckoningCycles() const { return dead_reckoning_cycles_; }
 
   double scale_cal_travelled_ = 0.0;
   std::vector<double> scale_cal_samples_;

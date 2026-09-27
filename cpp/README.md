@@ -3,7 +3,7 @@
 This directory holds the ROS 2 (Humble, C++17) side of the backup odometry:
 the online estimator, its error-state Kalman filter, the physics models and the
 training-data dump. It was developed against the recorded bags and builds
-clean with 42 passing unit tests.
+   clean with 40 passing gtest cases.
 
 Read this before integrating anything. Two sections matter: **what is verified**
 and **what is NOT done yet**.
@@ -73,8 +73,12 @@ the raw wheel reading is already the strong baseline.
 
 ## 3. What IS verified
 
-- **Build and tests.** `colcon build` clean; **42 tests, 0 failures**
-  (`test_core` 22/22, `test_ml` 18/18).
+- **Build and tests.** `colcon build` clean, no warnings under `-Wall -Wextra
+  -Wpedantic`. **40 gtest cases, 0 failures** (`test_core` 22/22, `test_ml` 18/18).
+  `colcon test-result` prints "42 tests" because it also counts the two
+  non-gtest entries it records for the package. The four probe programs in
+  `test/` (`blind_drift_probe`, `ml_accuracy_probe`, `position_drift_probe`,
+  `minimal_inference`) are not registered as CMake targets and do not run.
 - **Online behaviour.** Publishes `/result/velocity` and `/result/position` at
   50 Hz from a wall-clock timer, with `header.stamp` taken from the **bag
   clock**, never from wall time. A publication is suppressed until the first
@@ -165,6 +169,9 @@ cpp/
   tram_vehicle_msgs/        VelocitySensor, DriverControllerCommand
 ```
 
-Dependencies are ROS 2 Humble and Eigen only. The gradient-boosted JSON is
-evaluated by threshold walking, as the handoff recommends; there is no ONNX
-runtime and no Python at runtime.
+Dependencies are ROS 2 Humble and **yaml-cpp** only. There is no Eigen in this
+package: it was claimed here previously and is not included anywhere. The
+gradient-boosted gate JSON is evaluated by threshold walking, as the handoff
+recommends; there is no ONNX runtime and no Python at runtime. yaml-cpp is needed
+for the model descriptor and is declared as `yaml_cpp_vendor` in `package.xml`
+and linked directly in `CMakeLists.txt`.
