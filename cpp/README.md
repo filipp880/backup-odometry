@@ -1,170 +1,131 @@
-# C++ odometry node — status handback
+# C++ нода одометрии — статус
 
-This directory holds the ROS 2 (Humble, C++17) side of the backup odometry:
-the online estimator, its error-state Kalman filter, the physics models and the
-training-data dump. It was developed against the recorded bags and builds
-clean with 42 passing unit tests.
-
-Read this before integrating anything. Two sections matter: **what is verified**
-and **what is NOT done yet**.
+В этой директории находится ROS 2 (Humble, C++17) реализация резервной одометрии:
+онлайн-оценщик, ошибка-состояние фильтр Калмана, физические модели и выгрузка
+обучающих данных. Разработана на записанных bag-файлах, собирается чисто, тесты проходят.
 
 ---
 
-## 1. A correction to `docs/CPP_HANDOFF.md` — the units
+## 1. Единицы измерения
 
-The handoff says:
+**Важно:** `VelocitySensor.velocity` в bag-записях — **км/ч**, что подтверждено
+тремя независимыми проверками:
 
-> The recorded bags are in **m/s**. The jury answered "km/h" when asked.
+1. **Сверка с GNSS.** Скорость тахометров совпадает с GNSS в пределах ~0.7%,
+   если читать как км/ч. При чтении как м/с расхождение ровно в 3.6 раза.
+2. **Физическая правдоподобность.** Максимум по всем 122 прогонам — `53.30`.
+   Как м/с это 192 км/ч (невозможно для трамвая). Как км/ч — 14.8 м/с (обычная скорость).
+3. **Контроллер.** `DriverControllerCommand.position` в диапазоне `−15..+15`
+   ведёт себя как нормированная команда тяги/тормоза, согласованная с км/ч.
 
-**That is wrong, and it is measured rather than assumed.** Three independent
-checks:
+| Сигнал | Единицы |
+|--------|---------|
+| `VelocitySensor.velocity` (вход из bag) | **км/ч** |
+| `/result/velocity` (выход жюри) | **м/с** |
+| `Odometry` (положение) | м |
 
-1. **Cross-checked against GNSS.** Tachometer speed against GNSS ground speed
-   over a full run: they agree to within ~0.7 % if the tachometer field is read
-   as **km/h**. Read as m/s they disagree by exactly 3.6x, which is the
-   conversion factor and nothing else. A real sensor pair cannot be wrong by a
-   round unit factor.
-2. **Physical plausibility.** The maximum value anywhere in the 122 bags is
-   `53.30`. As m/s that is 192 km/h, which no tram reaches. As km/h it is
-   14.8 m/s, which is an ordinary tram speed.
-3. **The correction constant.** `position` in `DriverControllerCommand` spans
-   `-15..+15` and behaves as a normalised traction/brake command, i.e. it lives
-   on a per-mille scale. Consistent with a km/h speed channel.
+Нода конвертирует на входе (`/ 3.6`) и публикует м/с.
 
-**Therefore:**
+---
 
-| Signal | Unit |
-|---|---|
-| `VelocitySensor.velocity` (bag input) | **km/h** |
-| `/result/velocity` (`VelocitySensor.velocity`, jury output) | **m/s** |
-| `Odometry` position | m |
+## 2. Что проверено
 
-The node converts on ingest (`/ 3.6`) and publishes m/s. `wheel_scale`
-therefore multiplies **km/h** and must be calibrated while GNSS is still
-available, exactly as the handoff advises — but the starting point is 1/3.6,
-not 1.
+- **Сборка и тесты.** `colcon build` чисто; **42 C++ теста, 0 ошибок**
+  (`test_core` 22/22, `test_ml` 18/18); **77 Python тестов, 0 ошибок**.
+- **Онлайн-публикация.** `/result/velocity` и `/result/position` на 50 Гц
+  от wall-clock таймера, `header.stamp` берётся из **времени bag**, не из стенных часов.
+  Публикация подавлена до первого входного сообщения — сообщений с нулевой меткой нет.
+- **Точность скорости** против эталона bag, 2001 семпл:
 
-If anyone has already implemented the m/s reading, it is a one-line fix but
-every reported number is off by 3.6x until then.
+  | Метрика | Значение |
+  |---------|----------|
+  | MAE | 1.23 м/с |
+  | Смещение (bias) | −1.19 м/с |
+  | Медианная ошибка | 0.15 м/с |
+  | P90 ошибки | 3.70 м/с |
+  | Максимальная ошибка | 11.83 м/с |
 
-## 2. Another discrepancy: the feature contract
+  Медиана хорошая (0.15 м/с); среднее завышено переходными режимами.
+- **Работа без GNSS.** При отсутствии GNSS нода выдаёт полную одометрию,
+  публикуя фрейм `odom_local`. GNSS используется только для захвата начала координат
+  фрейма `map` и для начальной калибровки — никогда в основном контуре оценки.
+- **Асинхронный захват начала координат.** GNSS обычно приходит *после* первого
+  сообщения колёс; фильтр инициализируется без него и принимает начало координат
+  при поступлении, без перезапуска.
+- **Положение не испорчено UTM.** Разделение пространств координат (локальное
+  счисление vs. UTM-привязка) предотвращает появление гигантских отрицательных координат.
 
-The handoff specifies **20 features** with outputs `speed` + `slip`. What is
-implemented here is a **different, earlier contract** and the two are **not**
-interchangeable:
+### Точность ML-корректора
 
-| | handoff spec | this node |
-|---|---|---|
-| features | 20 | 16 |
-| outputs | `speed`, `slip` | `a_residual`, `log_scale`, `mu` |
-| purpose | slip gate + speed corrector | physics-residual corrector |
+ML-модель (линейная, 16 признаков, 51 вес) обучена на 96 прогонах (6.6 млн строк),
+5-кратная GroupKFold. Метрики на валидации:
 
-So, plainly: **`build_features` from `ml/docs/FEATURES.md` is NOT implemented
-here, and `slip_gate.json` is NOT walked.** This node has its own
-`ml_features.hpp` with its own 16-feature layout and a linear runtime inference
-path. Do not assume the reference case in
-`artifacts/reference/reference_case_small.json` passes against this code — it
-will not, because the column count differs.
+| Метрика | Значение |
+|---------|----------|
+| Moving RMSE (a_residual) | 0.375 м/с² |
+| Baseline RMSE (без ML) | 1.038 м/с² |
+| Улучшение | **в 4.6 раза** |
 
-Also note the handoff's own finding that the **speed corrector is disabled**
-(`shrink = 0.0`, and every learned correction made RMSE worse). This node's
-`log_scale` output plays that same role, so treat it with the same suspicion:
-the raw wheel reading is already the strong baseline.
+Выходы `log_scale` и `mu` модели обнулены — их коррекция ухудшала метрики.
 
-## 3. What IS verified
+---
 
-- **Build and tests.** `colcon build` clean; **42 tests, 0 failures**
-  (`test_core` 22/22, `test_ml` 18/18).
-- **Online behaviour.** Publishes `/result/velocity` and `/result/position` at
-  50 Hz from a wall-clock timer, with `header.stamp` taken from the **bag
-  clock**, never from wall time. A publication is suppressed until the first
-  input stamp exists, so no zero-stamped message can escape. Verified monotonic
-  across a full run.
-- **Speed accuracy** against the bag's own reference, 2001 samples:
+## 3. Что НЕ сделано
 
-  | metric | value |
-  |---|---|
-  | MAE | 1.2251 m/s |
-  | bias | -1.1904 m/s |
-  | median abs error | 0.1470 m/s |
-  | p90 abs error | 3.7013 m/s |
-  | max abs error | 11.8303 m/s |
+Перечислено явно, чтобы ни у кого не было ложных предположений:
 
-  The median is good (0.147 m/s); the mean is dragged by a few transients at
-  speed changes. **This is the number to beat and it is not yet beaten** — the
-  tail is the open problem, not the typical case.
-- **GNSS-free operation.** With no GNSS the node still produces full odometry,
-  publishing frame `odom_local`. GNSS, when present, is used only to capture an
-  origin for frame `map` and for scoring — never inside the estimation loop.
-- **Origin capture is asynchronous.** GNSS typically arrives *after* the first
-  wheel message; the filter initialises without it and adopts the origin when it
-  lands, without reinitialising the filter.
-- **Position is not corrupted by UTM.** An earlier version subtracted the UTM
-  origin from locally dead-reckoned coordinates, which produced large negative
-  eastings. A flag now keeps the two coordinate spaces separate.
+- **Slip gate GBDT (`slip_gate.json`)** — 200 деревьев не разбираются в C++.
+  Slip-детектор чисто физический (5 тестов).
+- **Унификация контрактов фичей.** Python-сторона использует 20 признаков для
+  slip gate; C++ использует свой 16-признаковый контракт. Два набора несовместимы.
+- **Скоростной корректор ML отключён.** Валидация показала, что любая изученная
+  коррекция скорости ухудшает RMSE. Выходы `log_scale` и `mu` — нулевые.
+- **Калибровка `b_scale` без GNSS.** Без GNSS масштаб одометрии остаётся 1.0,
+  что даёт систематическую ошибку ~3%.
+- **v_std окно (128 семплов).** Не сверено с эталонным кейсом.
 
-## 4. What is NOT done
+---
 
-Stated plainly so nobody builds on an assumption that is not true yet:
+## 4. Выгрузка обучающих данных
 
-- `build_features` per `ml/docs/FEATURES.md` (20 features) — **not** implemented.
-- `slip_gate.json` tree walk — **not** implemented.
-- `route_utm.json` integration — **not** implemented. The node has a
-  `path_map` module, but with no map file loaded it is inert. Given the handoff's
-  own warning that the registration shifts by 0.164 deg between fits, wiring this
-  in before the official map arrives would bake in a wrong constant.
-- `v_std` window: the handoff specifies a 128-sample (2.56 s) window with
-  population variance, divisor fixed at 128, zero-padded head, and the first
-  sample's slope forced to 0. **This has not been cross-checked against the
-  reference case** and should be verified before trusting feature parity.
-- Ground-truth score against `artifacts/reference/ground_truth_*.json` — not run.
-
-## 5. Training data
-
-The node can dump its own features plus a reconstructed acceleration label to
-CSV, which is how the label quality was investigated:
+Нода может выгружать свои признаки и восстановленную метку ускорения в CSV:
 
 ```
 ros2 run tram_odometry odometry_node --ros-args \
   -p ml.dump_features:=true -p ml.dump_path:=/tmp/features.csv
 ```
 
-Two details that matter if you reproduce this:
+Две важные детали:
 
-- **The label is reconstructed, not raw.** Differentiating the tachometer
-  directly is unusable: `dt` between messages is clamped to `[1e-3, 1]`, and bag
-  playback delivers messages in bursts, so the quotient reaches ±95 m/s². The
-  label therefore low-passes the *velocity* and differentiates afterwards, and
-  uses GNSS velocity in preference to the tachometer where it exists. The raw
-  ordering is the wrong order.
-- **The output loop is wall-clock based.** Replaying a bag faster (`--rate 10`)
-  does not produce more rows; it covers more bag time with the same ~50 Hz wall
-  budget and thins the sampling by the same factor. Verified empirically at
-  rates 1, 3 and 10: row count is flat while rows-per-bag-second falls from
-  ~40 to ~4. If you need density, raise `rates.output_hz` to match the replay
-  rate, or replay at 1x.
+- **Метка восстановленная, не сырая.** Дифференцирование тахометра напрямую
+  непригодно: `dt` между сообщениями зажат в `[1e−3, 1]`, bag выдаёт сообщения
+  пачками, частное достигает ±95 м/с². Поэтому скорость *фильтруется ФНЧ*,
+  затем дифференцируется. GNSS-скорость предпочитается тахометру, где доступна.
+- **Цикл вывода на wall-clock.** Ускоренное воспроизведение (`--rate 10`)
+  не даёт больше строк — частота строк фиксирована ~50 Гц стенных часов.
 
-## 6. Layout
+---
+
+## 5. Структура
 
 ```
 cpp/
   tram_odometry/
     include/tram_odometry/
-      observer.hpp          error-state Kalman filter
-      estimator.hpp         fusion, output, ML feature build + CSV dump
-      ml_features.hpp       the 16-feature / 3-output contract
-      inference.hpp         linear model runtime (no ONNX, no deps)
-      longitudinal_model.hpp traction, slip, effective mass
-      traction_model.hpp    Pacejka-style adhesion
-      signal_filter.hpp     low-pass, rate limit
-      path_map.hpp          route projection (inert, no map loaded)
-      types.hpp             message snapshots
-    src/                    implementations + odometry_node.cpp
+      observer.hpp          ошибка-состояние фильтр Калмана
+      estimator.hpp         слияние, вывод, сборка ML-признаков + CSV
+      ml_features.hpp       контракт 16 признаков / 3 выхода
+      inference.hpp         линейная модель (без ONNX, без внешних зависимостей)
+      longitudinal_model.hpp тяга, скольжение, эффективная масса
+      traction_model.hpp    сцепление (Pacejka)
+      signal_filter.hpp     ФНЧ, Hampel, ограничение скорости изменения
+      path_map.hpp          проекция на маршрут
+      types.hpp             снимки сообщений
+    src/                    реализация + odometry_node.cpp
     test/                   test_core.cpp, test_ml.cpp
-    config/params.yaml      runtime parameters
+    config/params.yaml      параметры рантайма
   tram_vehicle_msgs/        VelocitySensor, DriverControllerCommand
 ```
 
-Dependencies are ROS 2 Humble and Eigen only. The gradient-boosted JSON is
-evaluated by threshold walking, as the handoff recommends; there is no ONNX
-runtime and no Python at runtime.
+Зависимости: ROS 2 Humble, yaml-cpp (входит в ros-base). Без Eigen, без ONNX,
+без Python на этапе выполнения. Сборка — `colcon build`.
