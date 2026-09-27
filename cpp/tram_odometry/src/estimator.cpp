@@ -93,6 +93,11 @@ Estimator::Estimator(const Params& params, const std::string& ml_model_dir)
     map_file_rev_ = map_file_fwd_;
   }
 
+  if (map_has_candidates_ && map_file_rev_ == map_file_fwd_) {
+    // Same file for both directions: load immediately (it is UTM-coordinates).
+    loadPathMap(map_file_fwd_);
+  }
+
   // The learned corrector is optional: with ml.enable=false or an empty
   // ml_model_dir the pipeline is pure physics and nothing else changes.
   corrector_.configure(p_.ml, ml_model_dir);
@@ -305,8 +310,11 @@ bool Estimator::referencePathDistance(const UtmPoint& p, double& s_ref) const {
 
 void Estimator::updatePathTerms() {
   if (map_.empty()) return;
+  double query_s = is_rev_ ? (s_map_offset_ - observer_.s()) : (observer_.s() + s_map_offset_);
+  if (query_s < 0.0) query_s = 0.0;
+  if (query_s > map_.totalLength()) query_s = map_.totalLength();
   PathPoint pp;
-  if (map_.pointAt(observer_.s() + s_map_offset_, pp)) {
+  if (map_.pointAt(query_s, pp)) {
     path_grade_ = pp.grade;
     path_curvature_ = pp.curvature;
   }
@@ -387,24 +395,6 @@ bool Estimator::tryInitialise(double t) {
     last_fix_utm_ = p_now;
     last_fix_t_ = g.t_fix;
 
-    // --- route map: resolve direction once enough odometry travel has accrued.
-    // Sign of the easting change between the first fix and now decides which of
-    // the two files describes this run. Measuring a displacement rather than the
-    // absolute position of the first fix keeps it correct when the run starts
-    // mid-route, and it uses the map frame's own axis so no frame conversion is
-    // needed here.
-    if (map_has_candidates_ && !map_dir_resolved_) {
-      if (!dir_ref_valid_ && p_now.valid) {
-        dir_ref_easting_ = p_now.easting;
-        dir_ref_valid_ = true;
-      } else if (dir_ref_valid_ && travel_accum_m_ >= p_.path_map.min_travel_m) {
-        const double dx = p_now.easting - dir_ref_easting_;
-        // fwd is stored with easting decreasing, rev with easting increasing.
-        const bool fwd = (dx < 0.0);
-        loadPathMap(fwd ? map_file_fwd_ : map_file_rev_);
-        map_dir_resolved_ = true;
-      }
-    }
     now_e = p_now.easting;
     now_n = p_now.northing;
 
@@ -489,6 +479,26 @@ bool Estimator::step(double t) {
   if (!tryInitialise(t)) {
     processing_ms_ = 0.0;
     return false;
+  }
+
+  // Deferred route-map direction resolution: the map may have been loaded before
+  // enough odometry travel had accumulated for the direction to be resolved.
+  // This runs at 50 Hz, so it will fire as soon as the condition is met.
+  if (!map_dir_resolved_ && map_has_candidates_ && has_origin_ && initialised_) {
+    const GnssSnapshot g = gnss_;
+    if (gnssQualityOk(g, t)) {
+      const UtmPoint p_now = wgs84_to_utm(g.lat, g.lon, zone_);
+      if (p_now.valid) {
+        if (!dir_ref_valid_) {
+          dir_ref_easting_ = p_now.easting;
+          dir_ref_valid_ = true;
+        } else if (travel_accum_m_ >= p_.path_map.min_travel_m) {
+          const double dx = p_now.easting - dir_ref_easting_;
+          is_rev_ = (dx > 0.0);  // easting increasing = reverse direction
+          map_dir_resolved_ = true;
+        }
+      }
+    }
   }
 
   double dt = (last_t_ > -1e8) ? t - last_t_ : 1.0 / std::max(1.0, p_.rates.output_hz);
@@ -832,8 +842,12 @@ void Estimator::updatePositionOutput(double t) {
   bool coords_are_utm = false;
 
   if (!map_.empty()) {
+    double query_s = is_rev_ ? (s_map_offset_ - s) : (s + s_map_offset_);
+    // Clamp to valid map range (rev direction may go negative).
+    if (query_s < 0.0) query_s = 0.0;
+    if (query_s > map_.totalLength()) query_s = map_.totalLength();
     PathPoint pp;
-    if (map_.pointAt(s + s_map_offset_, pp)) {
+    if (map_.pointAt(query_s, pp)) {
       path_grade_ = pp.grade;
       path_curvature_ = pp.curvature;
       est_.heading = pp.heading;

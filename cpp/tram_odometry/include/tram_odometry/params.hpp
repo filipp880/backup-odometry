@@ -13,7 +13,7 @@ struct VehicleParams {
   double mass_kg = 38000.0;
   double wheel_radius_m = 0.30;
   int n_wheels_driven = 4;
-  double wheelbase_m = 2.755;
+  double wheelbase_m = 7.55;  /**< расстояние между осями вращения тележек вокруг вертикальной оси (per spec) */
   double front_overhang_m = 0.45;
   double rear_overhang_m = 0.45;
   double driveline_efficiency = 0.90;
@@ -103,7 +103,7 @@ struct FrameParams {
   double origin_lon = 0.0;
   double origin_alt = 0.0;
   bool xy_relative = true;  ///< subtract the origin easting/northing
-  bool z_relative = true;   ///< subtract the origin altitude
+  bool z_relative = false;  ///< keep absolute altitude (matches GNSS ellipsoidal height)
   bool publish_enu_twist = true;
 };
 

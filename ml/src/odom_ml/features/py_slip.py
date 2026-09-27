@@ -32,7 +32,7 @@ SLIP_HARD = 0.45
 BOGIE_MISMATCH_WARN = 0.25
 BOGIE_MISMATCH_FAULT = 0.8
 
-WHEELBASE_M = 2.755
+WHEELBASE_M = 7.55  # per spec: расстояние между осями вращения тележек
 
 # SlipDetector ctor: trust_lp_(2.0, 0.02), slip_lp_(5.0, 0.02)
 TRUST_TAU_S = 2.0

@@ -206,6 +206,7 @@ class Estimator {
   double travel_accum_m_ = 0.0;
   bool map_dir_resolved_ = false;
   bool map_has_candidates_ = false;
+  bool is_rev_ = false;  /**< tram travelling in reverse direction on route map */
   double dir_ref_easting_ = 0.0;
   bool dir_ref_valid_ = false;
 

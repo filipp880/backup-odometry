@@ -18,7 +18,7 @@ struct SlipFeatures {
   double a_wheel = 0.0;   ///< d(v_wheel)/dt, m/s^2
   double a_model = 0.0;   ///< model prediction, m/s^2
   double yaw_rate = 0.0;  ///< rad/s, 0 when unavailable
-  double wheelbase = 2.755;
+  double wheelbase = 7.55;  /**< расстояние между осями вращения тележек (per spec) */
   double drive_force = 0.0;  ///< N
   double brake_force = 0.0;  ///< N
   double adhesion_limit = 0.0;  ///< N

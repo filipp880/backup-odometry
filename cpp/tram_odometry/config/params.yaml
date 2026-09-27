@@ -58,8 +58,8 @@ tram_odometry:
     # GNSS гарантирован только в первые секунды и может быть недостоверен:
     # все параметры консервативны, обновления после инициализации — только gated.
     gnss:
-      baseline_m: 0.0             # базлайн антенн master-rover, 0 = не известен
-      baseline_heading_deg: 0.0   # направление базлайна в СК кузова
+      baseline_m: 12.436            # расстояние между антеннами master(-9.873,0,3) и rover(2.563,0,3)
+      baseline_heading_deg: 0.0     # rover впереди master по оси X
       use_aux_for_yaw: true       # оценивать рыскание по базлайну
       max_position_jump_m: 25.0   # скачок позиции больше — GNSS отбрасывается
       max_speed_mps: 35.0         # невозможная скорость по GNSS
@@ -74,7 +74,8 @@ tram_odometry:
       mass_kg: 38000.0            # полная масса; для lion_empty берётся из профиля
       wheel_radius_m: 0.300
       n_wheels_driven: 4          # все колёса ведущие
-      wheelbase_m: 2.755          # между центрами тележек (Львёнок)
+      # Между осями вращения тележек вокруг вертикальной оси (per spec: 7.55 м)
+      wheelbase_m: 7.55
       front_overhang_m: 0.450     # от носа до центра передней тележки
       rear_overhang_m: 0.450
       driveline_efficiency: 0.90
@@ -199,9 +200,11 @@ tram_odometry:
     # ------------------------------------------------------------- pathgraph / карта
     path_map:
       enable: true
-      file: "artifacts/route/route_map_fwd.csv"
-      file_fwd: "artifacts/route/route_map_fwd.csv"   # x decreasing
-      file_rev: "artifacts/route/route_map_rev.csv"   # x increasing
+      # UTM-based route map (WGS84, zone 37N). Single file used for both directions;
+      # direction is resolved from GNSS easting change and handled in code.
+      file: "artifacts/route/route_map.csv"
+      file_fwd: ""                    # empty = use file
+      file_rev: ""                    # empty = copy from file_fwd
       min_travel_m: 200.0                            # odometry travel before the map applies
       frame_convention: "utm"    # utm | enu
       search_radius_m: 25.0
