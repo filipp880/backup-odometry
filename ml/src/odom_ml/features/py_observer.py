@@ -67,25 +67,6 @@ def slip_from_excess(force_demand: float, force_limit: float) -> float:
     return min(SLIP_HARD, SLIP_PEAK + excess * span)
 
 
-def step_velocity(a: float, v: float, v_new: float, drive: float, brake: float, m_eff, mass) -> float:
-    """LongitudinalModel::stepVelocity, the sign and creep rules.
-
-    Comparing v*v_new misses standstill: at v == 0 the product is exactly 0, so
-    0 < 0 is false and the vehicle creeps backwards off a standstill.
-    """
-    flips = (v > 0.0 and v_new < 0.0) or (v < 0.0 and v_new > 0.0) or (abs(v) <= 1e-12 and v_new < 0.0)
-    braking = brake > 1.0
-    coasting = drive <= 1.0 and not braking
-    commanding = drive > 1.0
-    if braking and flips and not commanding:
-        return 0.0
-    if coasting and abs(v) < 0.05 and abs(a) * m_eff < 0.02 * mass * 9.80665:
-        return 0.0
-    if commanding and flips and drive > 0.0 and brake > 0.0:
-        return 0.0
-    return v_new
-
-
 class Observer:
     def __init__(self, wheel_radius: float = 0.30, mass: float = 38000.0, m_eff: float = 38244.44) -> None:
         self.R = wheel_radius

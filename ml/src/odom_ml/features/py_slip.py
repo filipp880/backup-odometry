@@ -204,16 +204,3 @@ class SlipDetector:
         self.slip_ratio = float(np.clip(self.slip_ratio, 0.0, SLIP_HARD))
 
         return self.trust
-
-
-def frozen_flags(v: np.ndarray, window: int = 20) -> tuple[np.ndarray, np.ndarray]:
-    """Constant-value detector: a stuck sensor holds one value for a whole window."""
-    n = v.size
-    out = np.zeros(n, dtype=bool)
-    if n < window:
-        return out, out.copy()
-    for i in range(window - 1, n):
-        seg = v[i - window + 1 : i + 1]
-        if np.isfinite(seg).all() and np.ptp(seg) < 1e-9:
-            out[i] = True
-    return out, out.copy()

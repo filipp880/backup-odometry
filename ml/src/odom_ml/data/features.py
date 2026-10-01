@@ -402,25 +402,6 @@ def implementation_notes() -> dict[str, object]:
     }
 
 
-def export_spec(path) -> Path:
-    """Write the machine-readable half of the contract."""
-    import json
-    from pathlib import Path as _P
-
-    spec = FeatureSpec(names=feature_names())
-    doc = {
-        "format": "odom_ml.feature_spec/1",
-        "feature_names": spec.names,
-        "n_features": len(spec.names),
-        "feature_spec": spec.as_dict(),
-        "implementation_notes": implementation_notes(),
-    }
-    p = _P(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(doc, indent=2, ensure_ascii=False), encoding="utf-8")
-    return p
-
-
 def reference_case(bag_id: str, n: int = 600) -> dict[str, np.ndarray]:
     """A fixed slice of a real run, for checking a C++ port against.
 

@@ -37,7 +37,7 @@ inline bool sane_latlon(double lat, double lon) {
 
 Estimator::Estimator(const Params& params, const std::string& ml_model_dir)
     : p_(params),
-      traction_(params.traction, params.vehicle),
+      traction_(params.traction),
       dynamics_(params.dynamics, params.vehicle, params.adhesion),
       slip_(params.adhesion, params.filters, params.vehicle),
       observer_(params.observer, params.vehicle) {

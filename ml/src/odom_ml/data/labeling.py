@@ -135,13 +135,3 @@ def label_grid(grid: Grid, hz: float = 50.0) -> dict[str, np.ndarray]:
         name = f"r{k}" if k not in ("lat0", "lon0", "alt0") else f"gnss_r{k}"
         labels[name] = v
     return labels
-
-
-def wheel_derivative(v: np.ndarray, dt: float, window: int = 5) -> np.ndarray:
-    x = np.where(np.isfinite(v), v, np.nan)
-    filled = _interp_nan(x, np.arange(x.size) * dt)
-    filled[np.isnan(x) & ~np.isfinite(filled)] = 0.0
-    if window > 1:
-        k = np.ones(window) / window
-        filled = np.convolve(filled, k, mode="same")
-    return np.gradient(filled, dt, edge_order=2)

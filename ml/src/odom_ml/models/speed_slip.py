@@ -75,10 +75,6 @@ class SpeedSlipModel:
         return trust * corrected + (1.0 - trust) * np.maximum(corrected, 0.0)
 
 
-def _xy(table, mask):
-    return table.X[mask], table
-
-
 def fit_speed_slip(
     table,
     train_mask: np.ndarray,

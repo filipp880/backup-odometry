@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .build import HZ, load_keys, load_labeled, manifest
+from .build import HZ, load_keys, manifest
 
 # a run shorter than this is a start/stop fragment, useful for debugging but not
 # representative of accumulated drift
@@ -54,15 +54,6 @@ class BagSplit:
 
     def summary(self) -> dict[str, object]:
         return {name: len(getattr(self, name)) for name in SPLIT_NAMES}
-
-
-def has_gnss(bag_id: str, hz: float = HZ) -> bool:
-    """True when the bag carries a usable GNSS fix to act as a reference."""
-    try:
-        d = load_labeled(bag_id, hz)
-    except (FileNotFoundError, OSError):
-        return False
-    return receiver_usable(d, "master")
 
 
 #: position columns and origin scalars per receiver, named explicitly rather

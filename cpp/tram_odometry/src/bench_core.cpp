@@ -85,7 +85,7 @@ int main(int argc, char** argv) {
   p.ml.model_dir = o.model_dir;
   p.ml.descriptor = o.descriptor;
 
-  tram::TractionModel traction(p.traction, p.vehicle);
+  tram::TractionModel traction(p.traction);
   tram::LongitudinalModel dynamics(p.dynamics, p.vehicle, p.adhesion);
   tram::SlipDetector slip(p.adhesion, p.filters, p.vehicle);
   tram::Observer observer(p.observer, p.vehicle);

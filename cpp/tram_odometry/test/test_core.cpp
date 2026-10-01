@@ -142,8 +142,7 @@ TEST(Longitudinal, StandingStillDoesNotRollBackwards) {
 
 TEST(Traction, ShapeIsNonLinearAndMonotone) {
   TractionParams tp;
-  VehicleParams vp;
-  TractionModel t(tp, vp);
+  TractionModel t(tp);
   const double s0 = t.shapeFactor(0.0);
   const double s1 = t.shapeFactor(0.15);
   const double s2 = t.shapeFactor(0.5);
@@ -158,16 +157,14 @@ TEST(Traction, ShapeIsNonLinearAndMonotone) {
 
 TEST(Traction, ConstantPowerLimitReducesForceAtSpeed) {
   TractionParams tp;
-  VehicleParams vp;
-  TractionModel t(tp, vp);
+  TractionModel t(tp);
   EXPECT_NEAR(t.powerLimit(0.0), 1.0, 1e-6);
   EXPECT_LT(t.powerLimit(20.0), 1.0);
 }
 
 TEST(Traction, ActuatorLagSmoothsStep) {
   TractionParams tp;
-  VehicleParams vp;
-  TractionModel t(tp, vp);
+  TractionModel t(tp);
   t.step(1.0, 0.0, 0.02);
   const double first = t.driveForce();
   EXPECT_LT(first, 0.5 * tp.max_tractive_effort_n);  // not instant
@@ -185,7 +182,7 @@ TEST(Observer, ConvergesToWheelSpeed) {
   AdhesionParams ap;
   LongitudinalModel dyn(dp, vp, ap);
   TractionParams tp;
-  TractionModel tr(tp, vp);
+  TractionModel tr(tp);
   obs.setInitialVelocity(8.0);
 
   for (int i = 0; i < 2000; ++i) {
@@ -219,7 +216,7 @@ TEST(Observer, LowTrustRejectsWheelUpdate) {
   AdhesionParams ap;
   LongitudinalModel dyn(dp, vp, ap);
   TractionParams tp;
-  TractionModel tr(tp, vp);
+  TractionModel tr(tp);
   obs.setInitialVelocity(0.0);
   // Full slip: the wheels report 15 m/s while the model says the tram is stopped.
   for (int i = 0; i < 200; ++i) {

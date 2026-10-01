@@ -39,11 +39,6 @@ from odom_ml.models.speed_slip import load_model  # noqa: E402
 FORMAT = "odom_ml.reference_case/1"
 DT = 1.0 / HZ
 
-# float32 round-trips through 9 significant decimal digits
-def _num(x) -> str:
-    f = float(x)
-    return f"{f:.9g}"
-
 
 def build_case(bag_id: str, rows: int, model, model_doc: dict) -> dict:
     d = load_labeled(bag_id, HZ)
@@ -127,98 +122,6 @@ def build_case(bag_id: str, rows: int, model, model_doc: dict) -> dict:
             "slip_gate_fired": (p >= model.slip_threshold).astype(np.int64),
         },
     }
-
-
-def _is_scalar(v) -> bool:
-    return not isinstance(v, (dict, list, tuple))
-
-
-def _fmt_scalar(v) -> str:
-    if isinstance(v, bool):
-        return "true" if v else "false"
-    if isinstance(v, (int, np.integer)):
-        return str(int(v))
-    if isinstance(v, (float, np.floating)):
-        f = float(v)
-        # JSON has no NaN literal.  A non-finite input is written as null, which
-        # the notes tell the port to read back as NaN -- the raw wheel topics do
-        # contain gaps, and the fallback rules for v_wheel have to be exercised.
-        if f != f:
-            return "null"
-        if f in (float("inf"), float("-inf")):
-            raise ValueError("infinite value in the reference case; cannot be encoded")
-        return _num(f)
-    return json.dumps(v, ensure_ascii=False)
-
-
-def _write(o, indent: int, out: list[str]) -> None:
-    """Objects multi-line; arrays of numbers kept on one line each.
-
-    The default pretty-printer turns a 4000x20 matrix into tens of thousands of
-    lines, which is unreadable and useless to diff.  This keeps the structure
-    visible while a whole feature row stays on one line.
-    """
-    pad = " " * indent
-    if isinstance(o, dict):
-        if not o:
-            out[-1] += "{}"
-            return
-        out[-1] += "{"
-        for i, (k, v) in enumerate(o.items()):
-            out.append(f"{pad}  {json.dumps(str(k), ensure_ascii=False)}: ")
-            _write(v, indent + 2, out)
-            out[-1] += "," if i < len(o) - 1 else ""
-        out.append(pad + "}")
-    elif isinstance(o, (list, tuple)):
-        if len(o) == 0:
-            out[-1] += "[]"
-            return
-        if all(_is_scalar(v) for v in o):
-            out[-1] += "[" + ", ".join(_fmt_scalar(v) for v in o) + "]"
-            return
-        if all(isinstance(v, (list, tuple)) for v in o):
-            out[-1] += "["
-            for i, row in enumerate(o):
-                out.append(pad + "  ")
-                _write(row, indent + 2, out)
-                out[-1] += "," if i < len(o) - 1 else ""
-            out.append(pad + "]")
-            return
-        out[-1] += "["
-        for i, v in enumerate(o):
-            out.append(pad + "  ")
-            _write(v, indent + 2, out)
-            out[-1] += "," if i < len(o) - 1 else ""
-        out.append(pad + "]")
-    else:
-        out[-1] += _fmt_scalar(o)
-
-
-def _round_floats(o):
-    """Recursively convert numpy scalars/arrays to plain python."""
-    if isinstance(o, dict):
-        return {k: _round_floats(v) for k, v in o.items()}
-    if isinstance(o, (list, tuple)):
-        return [_round_floats(v) for v in o]
-    if isinstance(o, (np.floating,)):
-        return float(o)
-    if isinstance(o, np.ndarray):
-        return [_round_floats(v) for v in o.tolist()]
-    if isinstance(o, (np.integer,)):
-        return int(o)
-    if isinstance(o, (np.bool_,)):
-        return bool(o)
-    return o
-
-
-def dump_json(case: dict, path: Path) -> None:
-    """Compact-but-readable, and valid JSON -- verified by reading it back."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    out: list[str] = [""]
-    _write(_round_floats(case), 0, out)
-    text = "\n".join(x for x in out if x is not None)
-    json.loads(text)  # refuse to emit anything the C++ side could not parse
-    path.write_text(text + "\n", encoding="utf-8")
 
 
 def verify(path: Path, model_doc: dict) -> dict[str, float]:

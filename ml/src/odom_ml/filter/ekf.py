@@ -79,23 +79,3 @@ class VelocityEKF:
     @property
     def k(self) -> float:
         return float(self.x[2])
-
-
-class RLS:
-    """Recursive least squares for a scalar gain on one input."""
-
-    def __init__(self, x0: float = 1.0, p0: float = 1.0, forget: float = 0.9995) -> None:
-        self.theta = x0
-        self.P = p0
-        self.forget = forget
-
-    def update(self, phi: float, y: float, r: float = 1.0) -> float:
-        self.P *= self.forget
-        denom = r + phi * self.P * phi
-        if denom <= 1e-12:
-            return self.theta
-        k = self.P * phi / denom
-        err = y - phi * self.theta
-        self.theta += k * err
-        self.P = max(self.P - k * phi * self.P, 1e-9)
-        return self.theta

@@ -1,11 +1,13 @@
 // Non-linear traction/brake model: controller position -> wheel force.
 //
-//   tau_cmd(u) = tau_max * Phi(u) * P_lim(v)
-//   F_wheel    = tau_cmd * i_g * eta / R,  limited by constant power
-//   dtau/dt    = (tau_cmd - tau) / tau_a
+//   F_wheel(u) = F_max * Phi(u) * P_lim(v)     limited by constant power
+//   dF/dt      = (F_cmd - F) / tau
 //
 // Phi(u) is a piecewise-linear table (the real notch characteristic is neither
-// linear in the handle position nor constant in speed).
+// linear in the handle position nor constant in speed). The limits live in
+// TractionParams and are already expressed as wheel force in newtons, so the
+// model needs no vehicle parameters: gear ratio and wheel radius belong to the
+// effective-mass computation in LongitudinalModel, not here.
 #pragma once
 
 #include "tram_odometry/params.hpp"
@@ -15,7 +17,7 @@ namespace tram {
 
 class TractionModel {
  public:
-  TractionModel(const TractionParams& tp, const VehicleParams& vp);
+  explicit TractionModel(const TractionParams& tp);
 
   void reset();
 
@@ -27,17 +29,14 @@ class TractionModel {
   /// Normalised non-linear shape of the controller characteristic, [0, 1].
   double shapeFactor(double u) const;
 
-  double shaftTorque() const { return torque_; }
   double driveForce() const { return drive_force_; }
   double brakeForce() const { return brake_force_; }
   double powerLimit(double v) const;
 
  private:
   TractionParams tp_;
-  VehicleParams vp_;
   FirstOrderLag drive_lag_;
   FirstOrderLag brake_lag_;
-  double torque_ = 0.0;
   double drive_force_ = 0.0;
   double brake_force_ = 0.0;
 };

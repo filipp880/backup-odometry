@@ -27,10 +27,6 @@ from .. import config as C
 from .build import HZ, load_labeled
 from .features import FeatureSpec, build_features, feature_names
 
-# a slip smaller than this is inside the sensor noise floor and carries no
-# usable signal; it is kept but flagged so training can exclude it
-SLIP_NOISE_M_S = 0.01
-
 # only samples where the reference is meaningful are used as targets
 MIN_GNSS_SPEED = 0.3
 MIN_SAMPLES_FOR_VALID_RATE = 200
@@ -126,45 +122,3 @@ def save_table(path: Path, table: TrainingTable, meta: dict[str, object] | None 
         meta=np.asarray(json.dumps(meta or {"spec": table.spec.as_dict()}, default=str)),
     )
     return path
-
-
-def load_table(path: Path) -> TrainingTable:
-    import json
-
-    with np.load(Path(path), allow_pickle=False) as z:
-        meta = json.loads(str(z["meta"]))
-        spec = FeatureSpec(
-            names=[str(s) for s in z["names"]],
-            hz=meta.get("hz", HZ),
-            wheel_scale=meta.get("wheel_scale", 1.0),
-            max_accel=meta.get("max_accel_m_s2", 2.0),
-            max_notional_rate=meta.get("max_notional_rate_per_s", 60.0),
-        )
-        return TrainingTable(
-            X=z["X"],
-            slip=z["slip"].astype(np.float64),
-            v_true=z["v_true"].astype(np.float64),
-            bag_id=z["bag_id"].astype(str).astype(object),
-            t=z["t"].astype(np.float64),
-            spec=spec,
-        )
-
-
-def slip_report(table: TrainingTable, mask: np.ndarray) -> dict[str, float]:
-    """Distribution of the slip target, used as the slip model's baseline."""
-    s = table.slip[mask]
-    a = table.X[mask][:, table.names.index("a_fast")].astype(np.float64)
-    out = {
-        "n": int(s.size),
-        "slip_mean": float(s.mean()),
-        "slip_rms": float(np.sqrt((s**2).mean())),
-        "slip_p05": float(np.percentile(s, 5)),
-        "slip_p50": float(np.percentile(s, 50)),
-        "slip_p95": float(np.percentile(s, 95)),
-    }
-    acc = s[a > 0.3]
-    brk = s[a < -0.3]
-    out["slip_accel_mean"] = float(acc.mean()) if acc.size else float("nan")
-    out["slip_brake_mean"] = float(brk.mean()) if brk.size else float("nan")
-    out["frac_above_noise"] = float((np.abs(s) > SLIP_NOISE_M_S).mean())
-    return out

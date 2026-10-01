@@ -3,8 +3,8 @@
 //   m_eff * dv/dt = F_drive - F_brake - F_roll - F_aero - F_grade - F_curve
 //
 // The drive force can never exceed what the wheel-rail contact can transmit,
-// so the model also yields the *physical acceleration ceiling* used by the slip
-// detector: if the measured wheel acceleration exceeds it, odometry is wrong.
+// so the model also yields the *adhesion force ceiling* used by the slip
+// detector: if the demanded wheel force exceeds it, odometry is wrong.
 #pragma once
 
 #include <algorithm>
@@ -41,13 +41,9 @@ class LongitudinalModel {
   double resistance(double v, double grade, double curvature) const;
   double adhesionLimit(double mu) const;
   double effectiveMass() const { return m_eff_; }
-  double accelCeiling(double mu) const;
 
   /// Slip ratio implied by a drive force that exceeds the adhesion limit.
   double slipFromExcess(double force_demand, double force_limit) const;
-
-  /// Normalised Pacejka-like curve used for smooth slip modelling.
-  double tyreCurve(double kappa) const;
 
   /// Slow online adaptation of the rolling resistance from steady-state runs.
   void adaptRollingResistance(double v, double a_meas, double f_other, double dt);

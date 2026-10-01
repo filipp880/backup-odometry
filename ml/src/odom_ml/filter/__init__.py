@@ -1,3 +1,3 @@
-from .ekf import RLS, VelocityEKF
+from .ekf import VelocityEKF
 
-__all__ = ["RLS", "VelocityEKF"]
+__all__ = ["VelocityEKF"]

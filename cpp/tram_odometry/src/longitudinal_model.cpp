@@ -31,18 +31,6 @@ double LongitudinalModel::adhesionLimit(double mu) const {
   return std::max(0.0, mu) * fz;
 }
 
-double LongitudinalModel::accelCeiling(double mu) const {
-  return adhesionLimit(mu) / m_eff_;
-}
-
-double LongitudinalModel::tyreCurve(double kappa) const {
-  // Simplified Pacejka magic formula on normalised slip s = kappa / kappa_peak.
-  const double s = kappa / std::max(1e-3, ap_.slip_peak);
-  const double bs = ap_.b_slip * s;
-  const double phi = std::atan(bs);
-  return std::sin(ap_.c_slip * std::atan(bs - ap_.e_slip * (bs - phi)));
-}
-
 double LongitudinalModel::slipFromExcess(double force_demand, double force_limit) const {
   if (force_limit <= 1e-6) return ap_.slip_hard;
   const double excess = force_demand / force_limit - 1.0;

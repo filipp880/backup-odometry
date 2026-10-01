@@ -11,8 +11,6 @@ live in py_pipeline.
 
 from __future__ import annotations
 
-import sys
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -42,15 +40,6 @@ def build_typestore():
         name = f"tram_vehicle_msgs/msg/{path.stem}"
         store.register(get_types_from_msg(path.read_text(encoding="utf-8"), name))
     return store
-
-
-@dataclass
-class BagPaths:
-    bag: Path
-    name: str
-    moving: bool
-    duration_s: float
-    v_max_kmh: float
 
 
 def _reindex(grid: np.ndarray, ts: np.ndarray, values: np.ndarray, default=np.nan):
@@ -207,32 +196,3 @@ def _read_gnss(bag_dir: Path, store) -> dict:
         for i, name in enumerate(names):
             out[f"{key}_{name}"] = (a[:, 0], a[:, 1 + i], np.nan)
     return out
-
-
-def scan_bags(data_dir: Path = REPO / "data") -> list[BagPaths]:
-    """Every bag under data/, with the movement summary used for ordering."""
-    out = []
-    for meta in sorted(Path(data_dir).glob("*/metadata.yaml")):
-        bag = meta.parent
-        try:
-            df = read_bag(bag)
-        except Exception as exc:  # a single bad bag must not stop the scan
-            print(f"  {bag.name}: unreadable ({exc})", file=sys.stderr)
-            continue
-        v = np.nanmax(
-            np.abs(np.concatenate([df["v_front_kmh"].to_numpy(), df["v_rear_kmh"].to_numpy()]))
-        )
-        out.append(
-            BagPaths(
-                bag=bag,
-                name=bag.name,
-                moving=bool(v > 5.0 and len(df) > 60 * hz_default()),
-                duration_s=len(df) / hz_default(),
-                v_max_kmh=float(v),
-            )
-        )
-    return out
-
-
-def hz_default() -> float:
-    return 50.0

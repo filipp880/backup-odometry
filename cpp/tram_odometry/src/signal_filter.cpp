@@ -69,8 +69,6 @@ LowPassFilter::LowPassFilter(double cutoff_hz, double nominal_dt) : cutoff_(cuto
   design(cutoff_, nominal_dt_);
 }
 
-void LowPassFilter::setCutoff(double cutoff_hz) { cutoff_ = cutoff_hz; }
-
 void LowPassFilter::reset() {
   s1_.reset();
   s2_.reset();
@@ -112,37 +110,6 @@ double LowPassFilter::process(double x, double dt) {
     design(cutoff_, dt);
   }
   return s2_.step(s1_.step(x));
-}
-
-// ---------------------------------------------------------- DispersionMonitor
-
-void DispersionMonitor::push(double x) {
-  if (count_ < window_) {
-    buf_[head_] = x;
-    head_ = (head_ + 1) % window_;
-    ++count_;
-  } else {
-    buf_[head_] = x;
-    head_ = (head_ + 1) % window_;
-  }
-}
-
-double DispersionMonitor::stddev() const {
-  if (count_ < 2) return 0.0;
-  double mean = 0.0;
-  for (int i = 0; i < count_; ++i) mean += buf_[i];
-  mean /= static_cast<double>(count_);
-  double var = 0.0;
-  for (int i = 0; i < count_; ++i) {
-    const double d = buf_[i] - mean;
-    var += d * d;
-  }
-  return std::sqrt(var / static_cast<double>(count_ - 1));
-}
-
-void DispersionMonitor::reset() {
-  count_ = 0;
-  head_ = 0;
 }
 
 }  // namespace tram

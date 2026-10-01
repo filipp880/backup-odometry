@@ -36,7 +36,6 @@ class LowPassFilter {
   LowPassFilter(double cutoff_hz, double nominal_dt);
   double process(double x, double dt);
   void reset();
-  void setCutoff(double cutoff_hz);
 
  private:
   void design(double cutoff_hz, double dt);
@@ -128,23 +127,6 @@ class FreezeDetector {
   bool has_prev_ = false;
   double last_value_ = 0.0;
   double last_change_t_ = 0.0;
-};
-
-/// Rolling dispersion (variance) over a small window, used for anomaly tests.
-class DispersionMonitor {
- public:
-  explicit DispersionMonitor(int window) : window_(window) {}
-  void push(double x);
-  double stddev() const;
-  void reset();
-  bool full() const { return count_ == window_; }
-
- private:
-  static constexpr int kMax = 32;
-  int window_;
-  double buf_[kMax];
-  int count_ = 0;
-  int head_ = 0;
 };
 
 }  // namespace tram

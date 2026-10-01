@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from .. import config as C
-from .bag import FIELDS, RawBag, read_bag
+from .bag import FIELDS, RawBag
 
 COLUMNS = (
     "t",
@@ -108,15 +107,3 @@ def grid_from_bag(
         frame["v_front"] = frame["v_front"] * C.KPH_TO_MS
         frame["v_rear"] = frame["v_rear"] * C.KPH_TO_MS
     return Grid(bag_id=raw.bag_id, vehicle=raw.vehicle, frame=frame)
-
-
-def load_grid(
-    bag_id: str,
-    bags_dir: Path | None = None,
-    hz: float = 50.0,
-    max_lag: float = 0.12,
-    mode: str = "causal",
-    typestore=None,
-) -> Grid:
-    raw = read_bag(bag_id, bags_dir=bags_dir, typestore=typestore)
-    return grid_from_bag(raw, hz=hz, max_lag=max_lag, mode=mode)
