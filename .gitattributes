@@ -1,0 +1,25 @@
+# Normalise line endings in the repository, and stop CRLF from leaking into
+# build inputs when the tree is checked out on Windows.
+
+* text=auto
+
+# A CRLF shebang makes the kernel exec "/bin/bash\r", which does not exist, so
+# entrypoint.sh and run_benchmark.sh fail to start from a Windows checkout even
+# though the committed file is fine. Force LF in the working tree as well as in
+# the objects.
+*.sh text eol=lf
+
+# Build inputs: whitespace-significant, but not CRLF-sensitive. Keep them LF so
+# a Windows configure step produces the same output as a Linux one.
+*.hpp text eol=lf
+*.cpp text eol=lf
+CMakeLists.txt text eol=lf
+*.cmake text eol=lf
+
+# ROS interface definitions are code, not prose.
+*.msg text eol=lf
+*.srv text eol=lf
+*.idl text eol=lf
+
+# Trained weights are raw float32; line-ending translation would corrupt them.
+*.bin binary
