@@ -24,11 +24,10 @@ from conftest import (
     reference_bags,
     require_cache,
     require_dataset,
-    track_utm,
 )
 
 from odom_ml import config as C
-from odom_ml.data.bag import CUSTOM_MSGS, build_typestore, list_bags
+from odom_ml.data.bag import CUSTOM_MSGS, build_typestore
 from odom_ml.data.build import HZ, build_one, load_keys, manifest
 from odom_ml.geo import enu_to_utm
 

@@ -24,8 +24,6 @@ import numpy as np
 import pandas as pd
 from scipy.signal import lfilter
 
-from .. import config as C
-
 HZ = 50.0
 DT = 1.0 / HZ
 

@@ -82,48 +82,6 @@ def build_case(bag_id: str, rows: int, model, model_doc: dict) -> dict:
     }
 
 
-def build_case(bag_id: str, rows: int, model, model_doc: dict) -> dict:
-    d = load_labeled(bag_id, HZ)
-    k = min(rows, d["t"].size)
-    u = d["u"][:k].astype(np.float64)
-    vf = d["v_front"][:k].astype(np.float64)
-    vr = d["v_rear"][:k].astype(np.float64)
-
-    X, spec = build_features(u, vf, vr, hz=HZ)
-    p = predict_json(model_doc, X.astype(np.float64))
-
-    return {
-        "format": FORMAT,
-        "source": {
-            "bag_id": bag_id,
-            "hz": HZ,
-            "rows": k,
-            "slice": f"first {k} samples of the run",
-            "t_first": float(d["t"][0]),
-            "t_last": float(d["t"][k - 1]),
-        },
-        "feature_spec": spec.as_dict(),
-        "implementation_notes": implementation_notes(),
-        "tolerance": {
-            "features_abs": 1e-6,
-            "probability_abs": 1e-9,
-            "rationale": (
-                "features are float32 on disk, so 1e-6 absolute is at the representation "
-                "limit; the probability is float64 math and should match to 1e-12."
-            ),
-        },
-        "inputs": {"u": u, "v_front": vf, "v_rear": vr},
-        "expected": {
-            "feature_names": feature_names(),
-            "features": X,
-            "v_wheel": X[:, feature_names().index("v_wheel")].astype(np.float64),
-            "slip_probability": p,
-            "slip_gate_threshold": float(model.slip_threshold),
-            "slip_gate_fired": (p >= model.slip_threshold).astype(np.int64),
-        },
-    }
-
-
 def verify(path: Path, model_doc: dict) -> dict[str, float]:
     """Rebuild from the stored inputs alone and compare with the stored outputs."""
     case = json.loads(path.read_text(encoding="utf-8"))

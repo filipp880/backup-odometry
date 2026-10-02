@@ -128,9 +128,6 @@ def test_ground_truth_actually_follows_the_route(path):
     """
     doc = json.loads(path.read_text(encoding="utf-8"))
     rows = doc["rows"]
-    org = doc["conventions"]["origin_utm"]
-    e = to_array([r[1] for r in rows]) + org[0]
-    n = to_array([r[2] for r in rows]) + org[1]
     ct = to_array([r[5] for r in rows])
     on = np.array([r[6] for r in rows], dtype=bool)
     assert on.any(), "no on-route rows at all"

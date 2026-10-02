@@ -1,6 +1,3 @@
-import sys
-from pathlib import Path
-
 import numpy as np
 
 from odom_ml.data.build import load_labeled, manifest
@@ -63,7 +60,6 @@ def main():
             continue
         Uv = np.concatenate([b["u"] for b in sel])
         Av = np.concatenate([robust_accel(b["accel"]) for b in sel])
-        Vv = np.concatenate([b["speed"] for b in sel])
         o = np.isfinite(Uv) & np.isfinite(Av) & (np.abs(Av) < A_VALID)
         print(f"  {veh}: n={o.sum()}")
         row = []

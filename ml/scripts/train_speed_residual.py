@@ -22,8 +22,6 @@ from __future__ import annotations
 import argparse
 import glob
 import json
-import struct
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -128,8 +126,6 @@ def content_group_id(df) -> str:
     rows were seen verbatim during training.
     """
     import hashlib
-
-    import pandas as pd
 
     keys = [k for k in HASH_KEYS if k in df.columns]
     blob = df[keys].to_csv(index=False).encode()
@@ -712,8 +708,8 @@ def main() -> None:
     n_standstill = int((v_all <= STOP_SPEED_KPH).sum())
     if args.clipped_rows == "downweight" and abs(args.clipped_weight - STANDSTILL_WEIGHT) < 1e-12:
         print(
-            f"  note: --clipped-weight equals STANDSTILL_WEIGHT, so regime membership is "
-            f"reported from speed below, not from weight"
+            "  note: --clipped-weight equals STANDSTILL_WEIGHT, so regime membership is "
+            "reported from speed below, not from weight"
         )
     print(
         f"  weights: moving {MOVING_WEIGHT}, standstill {STANDSTILL_WEIGHT} "

@@ -9,7 +9,7 @@ import numpy as np
 from odom_ml import config as C
 from odom_ml.data.build import HZ, load_labeled, manifest
 from odom_ml.estimator import EstimatorConfig, OdomEstimator
-from odom_ml.metrics import along_track_metrics, vel_metrics_by_mode, vel_metrics
+from odom_ml.metrics import along_track_metrics, vel_metrics
 from odom_ml.models.traction import TractionModel
 from odom_ml.position import load_pathgraph
 

@@ -119,7 +119,6 @@ def hampel(x: np.ndarray, window: int = WHEEL_HAMPEL_WINDOW, sigma: float = WHEE
     out = np.empty(n, dtype=np.float64)
     outlier = np.zeros(n, dtype=bool)
     last = 0.0
-    has = False
     buf: list[float] = []
     for i in range(n):
         v = float(x[i])
@@ -144,7 +143,6 @@ def hampel(x: np.ndarray, window: int = WHEEL_HAMPEL_WINDOW, sigma: float = WHEE
                 bad = abs(v - med) > 1e-3
         if not bad:
             last = v
-            has = True
             out[i] = v
         else:
             out[i] = last

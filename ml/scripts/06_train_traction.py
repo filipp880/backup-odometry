@@ -102,7 +102,6 @@ def fit_iterative(
     u: np.ndarray, v: np.ndarray, a: np.ndarray, rounds: int = 3, sigma: float = 0.12
 ) -> tuple[np.ndarray, dict]:
     w = np.ones_like(a)
-    table = None
     info: dict = {}
     for r in range(rounds):
         tab, cnt = binned_table(u, v, a, weights=w)

@@ -2,7 +2,7 @@
 import numpy as np
 
 from odom_ml.data.build import HZ, load_labeled, manifest
-from odom_ml.geo.geodesy import latlon_to_utm, utm_zone
+from odom_ml.geo.geodesy import latlon_to_utm
 from odom_ml.position.pathgraph import load_pathgraph
 
 route = load_pathgraph()

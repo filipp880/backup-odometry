@@ -2,7 +2,6 @@
 import sys
 import math
 import numpy as np
-from pathlib import Path
 
 # Предварительная проверка окружения
 try:

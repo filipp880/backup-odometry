@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from .. import config as C
-from .bag import FIELDS, RawBag
+from .bag import RawBag
 
 COLUMNS = (
     "t",

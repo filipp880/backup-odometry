@@ -19,8 +19,8 @@ import numpy as np
 import pytest
 
 from odom_ml import config as C
-from odom_ml.data.bag import build_typestore, list_bags
-from odom_ml.data.build import HZ, load_labeled, manifest
+from odom_ml.data.bag import list_bags
+from odom_ml.data.build import HZ, manifest
 from odom_ml.data.splits import BagSplit, bag_splits
 from odom_ml.geo import enu_to_utm
 from odom_ml.position.pathgraph import load_pathgraph
@@ -159,8 +159,6 @@ def projection_train_only(train_split, pathgraph) -> MapProjection:
     """
     target = stack_track_utm(train_split)
     reg = build_registration(pathgraph, target, trim=0.8)
-    from odom_ml.position.registration import RouteRegistration
-
     return MapProjection(pathgraph, reg)
 
 

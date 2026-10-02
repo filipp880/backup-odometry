@@ -12,7 +12,6 @@ run, so the port can measure itself without anything from this repository.
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 

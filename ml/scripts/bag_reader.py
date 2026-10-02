@@ -72,7 +72,6 @@ def read_bag(bag_dir: Path, hz: float = 50.0) -> pd.DataFrame:
 
     cols: dict[str, list] = {}
     with AnyReader([bag_dir], default_typestore=store) as reader:
-        n_msg = reader.message_count
         cols = {k: [] for k in ("tf", "vf", "vr", "cmd", "imu_y")}
         t0 = None
         for conn, tstamp, raw in reader.messages(

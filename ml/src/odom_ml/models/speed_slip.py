@@ -66,7 +66,6 @@ class SpeedSlipModel:
         fires the model prediction alone carries the estimate, so a spinning or
         locked wheel cannot drag the speed with it.
         """
-        wheel = X[:, self.feature_names.index("v_wheel")].astype(np.float64)
         corrected = self.predict_speed(X)
         if not slip_gate:
             return corrected

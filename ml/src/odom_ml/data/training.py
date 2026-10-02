@@ -23,7 +23,6 @@ from pathlib import Path
 
 import numpy as np
 
-from .. import config as C
 from .build import HZ, load_labeled
 from .features import FeatureSpec, build_features, feature_names
 

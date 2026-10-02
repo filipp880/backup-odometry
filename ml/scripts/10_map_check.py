@@ -3,7 +3,6 @@
 Правильный ICP: вращение применяется один раз, к начальной оси, затем перебор.
 """
 import json
-import sys
 
 import numpy as np
 

@@ -202,17 +202,9 @@ class OdometryNode : public rclcpp::Node {
     // The judge pairs our result with the reference by header.stamp using the
     // nearest-neighbour rule with ~0.05 s tolerance, so we must republish the
     // stamp of the input sample that produced this estimate, not the wall
-    // clock. Falling back to now() only happens if no input has arrived yet, in
-    // which case there is nothing meaningful to publish anyway.
-    builtin_interfaces::msg::Time hdr;
-    if (has_stamp_) {
-      hdr = last_stamp_;
-    } else {
-      const rclcpp::Time fallback(now(), RCL_ROS_TIME);
-      hdr = fallback;
-    }
-    const rclcpp::Time stamp = rclcpp::Time(hdr);
-    (void)stamp;
+    // clock. The !has_stamp_ guard above already returned in that case, so
+    // last_stamp_ is always the right value here.
+    builtin_interfaces::msg::Time hdr = last_stamp_;
 
     // ---- velocity (m/s, longitudinal) ----
     tram_vehicle_msgs::msg::VelocitySensor vel;

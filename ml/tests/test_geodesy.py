@@ -19,7 +19,6 @@ from odom_ml.geo import (
     latlon_to_utm,
     local_enu_to_latlon,
     mgrs_to_utm,
-    utm_to_mgrs,
     utm_zone,
 )
 

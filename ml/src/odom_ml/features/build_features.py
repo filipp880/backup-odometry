@@ -77,7 +77,6 @@ def build_features(
     along the series, so it cannot be computed one row at a time, and computing
     it per row silently produced an all-zero column.
     """
-    n = np.asarray(u).size
     cols = {
         "u": u,
         "v": v,
