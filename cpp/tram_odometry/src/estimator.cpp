@@ -386,21 +386,41 @@ bool Estimator::tryInitialise(double t) {
     }
   }
 
+  // The hybrid-start window at the end of step() is gated on last_fix_t_, so
+  // this has to follow the live fix and not only the very first one. While these
+  // two assignments sat below, behind the initialised_ early-return, they were
+  // frozen at the first fix for the whole run: the window condition stayed true
+  // forever and the window overwrote the dead-reckoned position with
+  // (first fix - origin) on every cycle, i.e. a constant (0, 0).
+  if (gnss_ok && has_origin_) {
+    const UtmPoint p_live = wgs84_to_utm(g.lat, g.lon, zone_);
+    if (p_live.valid) {
+      last_fix_utm_ = p_live;
+      last_fix_t_ = g.t_fix;
+    }
+  }
+
   if (initialised_) return true;
 
   double now_e = 0.0, now_n = 0.0;
 
   if (gnss_ok && has_origin_) {
     const UtmPoint p_now = wgs84_to_utm(g.lat, g.lon, zone_);
-    last_fix_utm_ = p_now;
-    last_fix_t_ = g.t_fix;
 
     now_e = p_now.easting;
     now_n = p_now.northing;
 
-    // Heading of the route: from the map if we have one, otherwise from the GNSS
-    // displacement since the origin.
-    if (!map_.empty()) {
+// Heading of the route: from the map if we have one, otherwise from the GNSS
+    // displacement since the origin. The map is only usable once the vehicle has
+    // actually been located on it: s_map_offset_valid_ is set by a successful
+    // project() at start-up, and a merely loaded map proves nothing, because the
+    // shipped route map does not cover every run. Measured on the dataset, 0 of
+    // 14 sampled bags were inside it, all sitting 1.3-2.9 km south of it. With a
+    // non-empty but unregistered map updatePositionOutput() clamps its query to
+    // s=0 and republishes the start of somebody else's route, which put the tram
+    // about 3 km away from where GNSS put it. With no registration there is
+    // nothing to anchor to, so leave the heading to the GNSS displacement below.
+    if (!map_.empty() && s_map_offset_valid_) {
       PathPoint pp;
       double along = 0.0, cross = 0.0;
       if (map_.project(p_now.easting, p_now.northing, pp, along, cross,
@@ -594,7 +614,6 @@ bool Estimator::step(double t) {
   ml_inference_ms_ = co.inference_ms;
   ml_applied_ = co.applied;
   ml_mu_ = co.mu_model;
-  const double a_model = a_physics + ml_a_residual_;
 
   // --------------------------------------------------------- 3. slip detector
   SlipFeatures sf;
