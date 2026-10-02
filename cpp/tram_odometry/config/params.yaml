@@ -174,7 +174,7 @@ tram_odometry:
     # отсутствии артефакта решение работает на чистой физике без изменений.
     ml:
       enable: true
-      model_dir: "models"
+      model_dir: ""
       descriptor: "ml_model.yaml"
       strict: false               # true = требовать валидную модель, иначе падать
       blend: 1.0                  # 0 = только физика, 1 = полная коррекция
