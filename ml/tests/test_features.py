@@ -185,7 +185,8 @@ def test_reference_case_contains_gaps_for_the_fallback_path(name):
 
 
 @pytest.mark.skipif(
-    not Path("artifacts/models/speed_slip/slip_gate.json").exists(), reason="gate not exported"
+    not Path("artifacts/models/speed_slip/speed_slip.joblib").exists(),
+    reason="joblib model not exported (pickles are gitignored by design)",
 )
 def test_exported_gate_still_reproduces_sklearn(real_run):
     model = load_model("artifacts/models/speed_slip/speed_slip.joblib")

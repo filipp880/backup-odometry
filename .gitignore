@@ -45,3 +45,15 @@ models_probe/
 train.log
 clip_stats.csv
 
+# Local isolated test env on this machine only, never commit.
+.wsl/
+.venv_test/
+.pip_cache/
+.tmp/
+
+# Web frontend build output and deps (rebuilt with pnpm install + build).
+web/frontend/node_modules/
+web/frontend/dist/
+web/backend/__pycache__/
+web/backend/.venv/
+

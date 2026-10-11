@@ -1,0 +1,10 @@
+.simulator { max-width: 800px; margin: 0 auto; padding: 16px; }
+.simulator .back { display: inline-block; margin-bottom: 16px; color: #0066cc; text-decoration: none; }
+.simulator h1 { margin-bottom: 8px; }
+.simulator .card { background: #fff; padding: 20px; border: 1px solid #eee; border-radius: 8px; margin: 16px 0; }
+.simulator .card h2 { margin-top: 0; }
+.simulator .card ul { margin: 8px 0; padding-left: 20px; }
+.simulator .card li { margin: 6px 0; }
+.simulator .card label { display: block; margin: 12px 0; }
+.simulator .card input, .simulator .card select { margin-left: 12px; padding: 6px; }
+.simulator .card p { color: #666; }

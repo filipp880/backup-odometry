@@ -1,0 +1,11 @@
+.login-wrap { display: flex; justify-content: center; align-items: center; min-height: 100vh; background: #f5f5f5; }
+.login-card { background: #fff; padding: 32px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); width: 100%; max-width: 360px; }
+.login-card h2 { margin-top: 0; text-align: center; }
+.login-card form { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
+.login-card label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.login-card input { padding: 10px; border: 1px solid #ccc; border-radius: 4px; }
+.login-card button[type="submit"] { padding: 12px; background: #0066cc; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; margin-top: 8px; }
+.login-card button[type="button"] { background: none; border: none; color: #0066cc; cursor: pointer; font-size: 14px; }
+.login-card .err { color: #cc0000; text-align: center; margin: 0 0 12px; }
+.login-card .demo { margin-top: 24px; text-align: center; color: #666; font-size: 13px; }
+.login-card .demo code { background: #f0f0f0; padding: 2px 6px; border-radius: 4px; }
